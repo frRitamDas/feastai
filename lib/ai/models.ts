@@ -68,18 +68,44 @@ export function getModelAvailability(modelId: string, userTier?: string) {
   return false;
 }
 
+// Expose a simple demo flag. Set process.env.DEMO or NEXT_PUBLIC_DEMO to "true" to enable demo mode.
+export const isDemo =
+  process.env.DEMO === 'true' || process.env.NEXT_PUBLIC_DEMO === 'true' || process.env.NODE_ENV !== 'production';
+
+// Return all gateway models. In production this could fetch from an external gateway; here we
+// return the static list defined above so the /api/models route can work without external deps.
+export async function getAllGatewayModels() {
+  return models;
+}
+
 // Helper required by /api/models route to check capabilities (vision, tools, artifacts)
-export function getCapabilities(modelId: string) {
-  if (modelId === 'gemini-2.5-flash') {
+// This function supports two usages:
+// - getCapabilities(modelId: string) -> returns capabilities for a single model
+// - getCapabilities() -> returns a mapping of modelId -> capabilities for all models
+export function getCapabilities(modelId?: string) {
+  const single = (id: string) => {
+    if (id === 'gemini-2.5-flash') {
+      return {
+        vision: true,
+        webSearch: true,
+        artifacts: true,
+      };
+    }
     return {
-      vision: true,
-      webSearch: true,
+      vision: false,
+      webSearch: false,
       artifacts: true,
     };
-  }
-  return {
-    vision: false,
-    webSearch: false,
-    artifacts: true,
   };
+
+  if (typeof modelId === 'string') {
+    return single(modelId);
+  }
+
+  // No modelId -> return mapping for all known models
+  const map: Record<string, { vision: boolean; webSearch: boolean; artifacts: boolean }> = {};
+  for (const m of models) {
+    map[m.id] = single(m.id);
+  }
+  return map;
 }
