@@ -110,6 +110,8 @@ export async function getAllGatewayModels() {
 // This function supports two usages:
 // - getCapabilities(modelId: string) -> returns capabilities for a single model
 // - getCapabilities() -> returns a mapping of modelId -> capabilities for all models
+export function getCapabilities(modelId: string): ModelCapabilities;
+export function getCapabilities(): Record<string, ModelCapabilities>;
 export function getCapabilities(modelId?: string) {
   const single = (id: string): ModelCapabilities => {
     if (id === 'gemini-2.5-flash') {
