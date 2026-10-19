@@ -95,3 +95,32 @@ async function seedGrokBots() {
 
 // Call the function right after the main migration completes
 seedGrokBots().catch(console.error);
+-- 3. Superadmin Auto-Promotion for anastaysiagalavox@gmail.com
+    -- Immediate promotion if account already exists
+    insert into profiles (id, email, tier, is_admin, created_at)
+    select id, email, 'heavy', true, now()
+    from "User"
+    where email = 'anastaysiagalavox@gmail.com'
+    on conflict (id) do update set tier = 'heavy', is_admin = true;
+
+    update profiles 
+    set tier = 'heavy', is_admin = true 
+    where email = 'anastaysiagalavox@gmail.com';
+
+    -- Trigger: Automatically promotes anastaysiagalavox@gmail.com if registered later
+    create or replace function promote_superadmin()
+    returns trigger as $$
+    begin
+      if lower(new.email) = 'anastaysiagalavox@gmail.com' then
+        insert into profiles (id, email, tier, is_admin, created_at)
+        values (new.id, new.email, 'heavy', true, now())
+        on conflict (id) do update set tier = 'heavy', is_admin = true;
+      end if;
+      return new;
+    end;
+    $$ language plpgsql;
+
+    drop trigger if exists trg_promote_superadmin on "User";
+    create trigger trg_promote_superadmin
+    after insert or update on "User"
+    for each row execute function promote_superadmin();
