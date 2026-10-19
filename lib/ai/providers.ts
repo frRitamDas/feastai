@@ -1,3 +1,4 @@
+// lib/ai/providers.ts
 import { customProvider, gateway } from "ai";
 import { isTestEnvironment } from "../constants";
 import { titleModel } from "./models";
@@ -29,5 +30,7 @@ export function getTitleModel() {
   if (isTestEnvironment && myProvider) {
     return myProvider.languageModel("title-model");
   }
-  return gateway.languageModel(titleModel.id);
+  // titleModel is a string id (e.g. 'llama-3.3-70b-versatile') now,
+  // so pass it directly to gateway.languageModel.
+  return gateway.languageModel(titleModel);
 }
