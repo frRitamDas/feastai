@@ -1,27 +1,20 @@
-import { createGroq } from '@ai-sdk/groq';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-
-const groq = createGroq({
-  apiKey: process.env.GROQ_API_KEY,
-});
-
-const google = createGoogleGenerativeAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
-
-// Title model required by providers.ts
-export const titleModel = groq('llama-3.3-70b-versatile');
+// The models list and helper utilities used by UI and API routes.
+// NOTE: avoid importing server-only provider SDKs here so this module can
+// be imported in client components during the Next build. Provider
+// instances are created in lib/ai/providers.ts instead.
 
 export const DEFAULT_MODEL_NAME = 'llama-3.3-70b-versatile';
+
+// Title model id used by providers.ts
+export const titleModel = DEFAULT_MODEL_NAME;
 
 export interface Model {
   id: string;
   label: string;
   apiIdentifier: string;
-  provider: any;
+  provider: string; // provider name (do NOT import SDK instances here)
   tier?: string;
   description: string;
-  // Optional extra provider config that some models may include
   gatewayOrder?: number[];
   reasoningEffort?: string;
 }
@@ -31,7 +24,6 @@ export type ChatModel = {
   id: string;
   name: string;
   provider: string;
-  // Optional fields that certain models may expose
   gatewayOrder?: number[];
   reasoningEffort?: string;
 };
@@ -49,7 +41,7 @@ export const models: Model[] = [
     id: 'deepseek-r1-distill-llama-70b',
     label: 'SuperGrok Heavy (DeepSeek R1)',
     apiIdentifier: 'deepseek-r1-distill-llama-70b',
-    provider: groq,
+    provider: 'groq',
     tier: 'heavy',
     description: 'Unfiltered, maximum reasoning power with visible thinking trace.',
     reasoningEffort: 'high',
@@ -58,7 +50,7 @@ export const models: Model[] = [
     id: 'llama-3.3-70b-versatile',
     label: 'SuperGrok Fast (Llama 3.3 70B)',
     apiIdentifier: 'llama-3.3-70b-versatile',
-    provider: groq,
+    provider: 'groq',
     tier: 'free',
     description: 'Ultra-low latency streaming for general conversation.',
   },
@@ -66,7 +58,7 @@ export const models: Model[] = [
     id: 'gemini-2.5-flash',
     label: 'ChatGPT Pro (Gemini 2.5 Flash)',
     apiIdentifier: 'gemini-2.5-flash',
-    provider: google,
+    provider: 'google',
     tier: 'pro',
     description: '1M+ context window, live web search grounding, and vision.',
   },
@@ -74,24 +66,16 @@ export const models: Model[] = [
     id: 'qwen-2.5-coder-32b',
     label: 'Codex / Build Engine',
     apiIdentifier: 'qwen-2.5-coder-32b',
-    provider: groq,
+    provider: 'groq',
     tier: 'pro',
     description: 'Optimized for full-stack architecture, debugging, and codebases.',
   },
 ];
 
-// Map to the public chat model shape expected by UI and routes
-function providerNameFromModel(m: Model) {
-  if (m.provider === google) return 'google';
-  if (m.provider === groq) return 'groq';
-  // fallback to apiIdentifier prefix
-  return String(m.apiIdentifier).split('-')[0] ?? 'unknown';
-}
-
 export const chatModels: ChatModel[] = models.map((m) => ({
   id: m.id,
   name: m.label,
-  provider: providerNameFromModel(m),
+  provider: m.provider,
   ...(m.gatewayOrder ? { gatewayOrder: m.gatewayOrder } : {}),
   ...(m.reasoningEffort ? { reasoningEffort: m.reasoningEffort } : {}),
 }));
