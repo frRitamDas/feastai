@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob";
+import { putFile } from "@/lib/storage";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -49,15 +49,18 @@ export async function POST(request: Request) {
     const fileBuffer = await file.arrayBuffer();
 
     try {
-      const data = await put(`${safeName}`, fileBuffer, {
-        access: "public",
+      const data = await putFile(`${safeName}`, fileBuffer, {
+        contentType: file.type,
+        public: true,
       });
 
       return NextResponse.json(data);
-    } catch {
+    } catch (err) {
+      console.error("Upload error:", err);
       return NextResponse.json({ error: "Upload failed" }, { status: 500 });
     }
-  } catch {
+  } catch (err) {
+    console.error("Processing error:", err);
     return NextResponse.json(
       { error: "Failed to process request" },
       { status: 500 }

@@ -1,0 +1,17 @@
+@@
+   images: {
+     remotePatterns: [
+       {
+         hostname: "avatar.vercel.sh",
+       },
++      {
++        hostname: "*.s3.amazonaws.com",
++      },
+       {
+         hostname: "*.public.blob.vercel-storage.com",
+         protocol: "https",
+       },
+     ],
+   },
+@@
+ export default withBotId(nextConfig);
