@@ -4,7 +4,7 @@ import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import { auth } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
-import { titleModel } from "@/lib/ai/models";
+import { titleModel, models } from "@/lib/ai/models";
 import { titlePrompt } from "@/lib/ai/prompts";
 import { getTitleModel } from "@/lib/ai/providers";
 import {
@@ -25,17 +25,24 @@ export async function generateTitleFromUserMessage({
 }: {
   message: UIMessage;
 }) {
+  // titleModel is a string id (e.g. 'llama-3.3-70b-versatile').
+  // Look up any provider-specific options from the models list (server-only).
+  const titleModelConfig = models.find((m) => m.id === titleModel);
+
+  const providerOptions: Record<string, any> = {};
+  if (titleModelConfig?.gatewayOrder) {
+    providerOptions.gateway = { order: titleModelConfig.gatewayOrder };
+  }
+
   const { text } = await generateText({
     instructions: titlePrompt,
     model: getTitleModel(),
     prompt: getTextFromMessage(message),
-    providerOptions: {
-      gateway: { order: titleModel.gatewayOrder },
-    },
+    providerOptions,
   });
   return text
     .replace(/^[#*"\s]+/, "")
-    .replace(/["]+$/, "")
+    .replace(/[\"]+$/, "")
     .trim();
 }
 
