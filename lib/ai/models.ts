@@ -21,7 +21,28 @@ export interface Model {
   provider: any;
   tier?: string;
   description: string;
+  // Optional extra provider config that some models may include
+  gatewayOrder?: number[];
+  reasoningEffort?: string;
 }
+
+// Public ChatModel shape used by UI and routes
+export type ChatModel = {
+  id: string;
+  name: string;
+  provider: string;
+  // Optional fields that certain models may expose
+  gatewayOrder?: number[];
+  reasoningEffort?: string;
+};
+
+export type ModelCapabilities = {
+  vision?: boolean;
+  webSearch?: boolean;
+  artifacts?: boolean;
+  tools?: boolean;
+  reasoning?: boolean;
+};
 
 export const models: Model[] = [
   {
@@ -31,6 +52,7 @@ export const models: Model[] = [
     provider: groq,
     tier: 'heavy',
     description: 'Unfiltered, maximum reasoning power with visible thinking trace.',
+    reasoningEffort: 'high',
   },
   {
     id: 'llama-3.3-70b-versatile',
@@ -58,6 +80,28 @@ export const models: Model[] = [
   },
 ];
 
+// Map to the public chat model shape expected by UI and routes
+function providerNameFromModel(m: Model) {
+  if (m.provider === google) return 'google';
+  if (m.provider === groq) return 'groq';
+  // fallback to apiIdentifier prefix
+  return String(m.apiIdentifier).split('-')[0] ?? 'unknown';
+}
+
+export const chatModels: ChatModel[] = models.map((m) => ({
+  id: m.id,
+  name: m.label,
+  provider: providerNameFromModel(m),
+  ...(m.gatewayOrder ? { gatewayOrder: m.gatewayOrder } : {}),
+  ...(m.reasoningEffort ? { reasoningEffort: m.reasoningEffort } : {}),
+}));
+
+// Convenience: set of allowed chat model ids
+export const allowedModelIds = new Set(chatModels.map((m) => m.id));
+
+// Default chat model used across the UI
+export const DEFAULT_CHAT_MODEL = DEFAULT_MODEL_NAME;
+
 // Helper required by /api/models route to check model access
 export function getModelAvailability(modelId: string, userTier?: string) {
   const model = models.find((m) => m.id === modelId);
@@ -83,18 +127,34 @@ export async function getAllGatewayModels() {
 // - getCapabilities(modelId: string) -> returns capabilities for a single model
 // - getCapabilities() -> returns a mapping of modelId -> capabilities for all models
 export function getCapabilities(modelId?: string) {
-  const single = (id: string) => {
+  const single = (id: string): ModelCapabilities => {
     if (id === 'gemini-2.5-flash') {
       return {
         vision: true,
         webSearch: true,
         artifacts: true,
+        tools: true,
+        reasoning: true,
       };
     }
+
+    if (id === 'deepseek-r1-distill-llama-70b') {
+      return {
+        vision: false,
+        webSearch: false,
+        artifacts: true,
+        tools: true,
+        reasoning: true,
+      };
+    }
+
+    // default conservative capabilities
     return {
       vision: false,
       webSearch: false,
       artifacts: true,
+      tools: false,
+      reasoning: false,
     };
   };
 
@@ -103,7 +163,7 @@ export function getCapabilities(modelId?: string) {
   }
 
   // No modelId -> return mapping for all known models
-  const map: Record<string, { vision: boolean; webSearch: boolean; artifacts: boolean }> = {};
+  const map: Record<string, ModelCapabilities> = {};
   for (const m of models) {
     map[m.id] = single(m.id);
   }
