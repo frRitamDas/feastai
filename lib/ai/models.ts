@@ -9,12 +9,21 @@ const google = createGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
-// Required by providers.ts to generate conversation titles
+// Title model required by providers.ts
 export const titleModel = groq('llama-3.3-70b-versatile');
 
 export const DEFAULT_MODEL_NAME = 'llama-3.3-70b-versatile';
 
-export const models = [
+export interface Model {
+  id: string;
+  label: string;
+  apiIdentifier: string;
+  provider: any;
+  tier?: string;
+  description: string;
+}
+
+export const models: Model[] = [
   {
     id: 'deepseek-r1-distill-llama-70b',
     label: 'SuperGrok Heavy (DeepSeek R1)',
@@ -48,3 +57,29 @@ export const models = [
     description: 'Optimized for full-stack architecture, debugging, and codebases.',
   },
 ];
+
+// Helper required by /api/models route to check model access
+export function getModelAvailability(modelId: string, userTier?: string) {
+  const model = models.find((m) => m.id === modelId);
+  if (!model) return false;
+  if (!model.tier || model.tier === 'free') return true;
+  if (userTier === 'heavy') return true;
+  if (userTier === 'pro' && model.tier === 'pro') return true;
+  return false;
+}
+
+// Helper required by /api/models route to check capabilities (vision, tools, artifacts)
+export function getCapabilities(modelId: string) {
+  if (modelId === 'gemini-2.5-flash') {
+    return {
+      vision: true,
+      webSearch: true,
+      artifacts: true,
+    };
+  }
+  return {
+    vision: false,
+    webSearch: false,
+    artifacts: true,
+  };
+}
