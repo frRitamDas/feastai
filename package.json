@@ -16,7 +16,8 @@
     "db:pull": "drizzle-kit pull",
     "db:check": "drizzle-kit check",
     "db:up": "drizzle-kit up",
-    "test": "PLAYWRIGHT=True playwright test"
+    "test": "PLAYWRIGHT=True playwright test",
+    "test:unit": "tsx --test tests/unit/*.test.ts"
   },
   "dependencies": {
     "@ai-sdk/otel": "^1.0.15",

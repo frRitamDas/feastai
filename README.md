@@ -14,10 +14,14 @@ Use Node.js 22+ and pnpm 10.32.1. Copy `.env.example` to `.env.local` and supply
 
 ## Validation
 
-Run `corepack pnpm check`, `corepack pnpm exec tsc --noEmit`, `corepack pnpm test`, and `corepack pnpm build`. Browser tests need the credentials described in `playwright.config.ts` and a working database. A successful build alone does not prove production readiness.
+Run `corepack pnpm check`, `corepack pnpm exec tsc --noEmit`, `corepack pnpm test:unit`, `corepack pnpm test`, and `corepack pnpm build`. Browser tests need the credentials described in `playwright.config.ts` and a working database. A successful build alone does not prove production readiness.
 
 ## Deployment and recovery
 
 See [operations](docs/operations/release-and-recovery.md). Never commit secrets. Configure deployment secrets through the hosting provider. Do not promote a release without testing authentication, authorization, persistence, model access and rollback on an isolated environment. The existing database schema must be reviewed for RLS before exposing it through Supabase APIs.
 
 This project builds on the Vercel AI SDK chatbot foundation; retain the repository's license and upstream attribution in legal notices.
+
+## Provider foundations (not yet wired into chat)
+
+Server-only modules include AES-256-GCM credential envelope helpers and bounded model-list discovery for Groq, OpenRouter, Cerebras, SambaNova and Mistral. Discovery results do not prove a key can run a model, and OpenRouter may return a public catalog without validating the key. No credentials or catalog are persisted and no administrator APIs or UI use these modules yet. Do not deploy them as a working vault. The future vault must provide a separately managed, base64-encoded 32-byte encryption key and a tested key rotation procedure; it must never share the authentication secret. Custom endpoints, Google and Cloudflare require separate adapters and SSRF protections.

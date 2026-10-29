@@ -19,7 +19,8 @@ export const myProvider = isTestEnvironment
 
 export function getLanguageModel(modelId: string) {
   if (isTestEnvironment && myProvider) {
-    return myProvider.languageModel(modelId);
+    // Tests use one deterministic mock regardless of the selected public model.
+    return myProvider.languageModel("chat-model");
   }
 
   return gateway.languageModel(modelId);
