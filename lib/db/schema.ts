@@ -2,11 +2,14 @@ import type { InferSelectModel } from "drizzle-orm";
 import {
   boolean,
   foreignKey,
+  index,
   json,
+  jsonb,
   pgTable,
   primaryKey,
   text,
   timestamp,
+  unique,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -134,3 +137,72 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+// Server-managed catalog. A discovered listing is not proof of inference access.
+export const graceProviderKey = pgTable(
+  "GraceProviderKey",
+  {
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    discoveryStatus: varchar("discoveryStatus", { length: 32 })
+      .notNull()
+      .default("pending"),
+    enabled: boolean("enabled").notNull().default(false),
+    encryptedCredential: jsonb("encryptedCredential").notNull(),
+    id: uuid("id").primaryKey().notNull(),
+    label: varchar("label", { length: 100 }).notNull(),
+    lastDiscoveryAt: timestamp("lastDiscoveryAt", { withTimezone: true }),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({ identity: unique().on(table.id, table.provider) })
+);
+
+export const graceModel = pgTable(
+  "GraceModel",
+  {
+    enabled: boolean("enabled").notNull().default(false),
+    firstDiscoveredAt: timestamp("firstDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    id: uuid("id").primaryKey().notNull().defaultRandom(),
+    lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    name: varchar("name", { length: 300 }).notNull(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    upstreamId: varchar("upstreamId", { length: 300 }).notNull(),
+  },
+  (table) => ({
+    identity: unique().on(table.id, table.provider),
+    upstream: unique().on(table.provider, table.upstreamId),
+  })
+);
+
+export const graceKeyModel = pgTable(
+  "GraceKeyModel",
+  {
+    keyId: uuid("keyId").notNull(),
+    lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    modelId: uuid("modelId").notNull(),
+    permitted: boolean("permitted").notNull().default(false),
+    provider: varchar("provider", { length: 32 }).notNull(),
+  },
+  (table) => ({
+    keyRef: foreignKey({
+      columns: [table.keyId, table.provider],
+      foreignColumns: [graceProviderKey.id, graceProviderKey.provider],
+    }).onDelete("cascade"),
+    lookup: index("grace_key_model_lookup").on(table.modelId, table.permitted),
+    modelRef: foreignKey({
+      columns: [table.modelId, table.provider],
+      foreignColumns: [graceModel.id, graceModel.provider],
+    }).onDelete("cascade"),
+    pk: primaryKey({ columns: [table.keyId, table.modelId] }),
+  })
+);
