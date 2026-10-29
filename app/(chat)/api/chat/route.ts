@@ -16,7 +16,6 @@ import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import {
   allowedModelIds,
   chatModels,
-  DEFAULT_CHAT_MODEL,
   getCapabilities,
   getModelAvailability,
 } from "@/lib/ai/models";
@@ -94,9 +93,13 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    const chatModel = allowedModelIds.has(selectedChatModel)
-      ? selectedChatModel
-      : DEFAULT_CHAT_MODEL;
+    if (!allowedModelIds.has(selectedChatModel)) {
+      return new ChatbotError(
+        "bad_request:api",
+        "The selected model is unavailable. Choose another model and try again."
+      ).toResponse();
+    }
+    const chatModel = selectedChatModel;
 
     await checkIpRateLimit(ipAddress(request));
 
