@@ -1,71 +1,65 @@
-<a href="https://chatbot.ai-sdk.dev/demo">
-  <img alt="Chatbot" src="app/(chat)/opengraph-image.png">
-  <h1 align="center">Chatbot</h1>
-</a>
+# Grace AI
 
-<p align="center">
-    Chatbot (formerly AI Chatbot) is a free, open-source template built with Next.js and the AI SDK that helps you quickly build powerful chatbot applications.
-</p>
+**Grace AI** is a thoughtful AI workspace for writing, learning, coding, research, brainstorming, and everyday questions.
 
-<p align="center">
-  <a href="https://chatbot.ai-sdk.dev/docs"><strong>Read Docs</strong></a> ·
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#model-providers"><strong>Model Providers</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running locally</strong></a>
-</p>
-<br/>
+Grace is built on the Next.js App Router and Vercel AI SDK. This repository started from the open-source Vercel AI chatbot template; review the upstream license and notices before redistribution.
 
-## Features
+## Product principles
 
-- [Next.js](https://nextjs.org) App Router
-  - Advanced routing for seamless navigation and performance
-  - React Server Components (RSCs) and Server Actions for server-side rendering and increased performance
-- [AI SDK](https://ai-sdk.dev/docs/introduction)
-  - Unified API for generating text, structured objects, and tool calls with LLMs
-  - Hooks for building dynamic chat and generative user interfaces
-  - Supports OpenAI, Anthropic, Google, xAI, and other model providers via AI Gateway
-- [shadcn/ui](https://ui.shadcn.com)
-  - Styling with [Tailwind CSS](https://tailwindcss.com)
-  - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
-- Data Persistence
-  - [Neon Serverless Postgres](https://vercel.com/marketplace/neon) for saving chat history and user data
-  - [Vercel Blob](https://vercel.com/storage/blob) for efficient file storage
-- [Auth.js](https://authjs.dev)
-  - Simple and secure authentication
+- Clean, responsive, accessible interface for desktop, tablet, and mobile
+- Streaming AI conversations built on the existing chat endpoint
+- Thoughtful model selection through the existing AI Gateway integration
+- Secure server-side secrets and authenticated persistence
+- Keyboard-friendly interactions and reduced-motion support
+- Honest error handling: no fabricated responses or fake tool results
 
-## Model Providers
+## Stack
 
-This template uses the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) to access multiple AI models through a unified interface. Models are configured in `lib/ai/models.ts` with per-model provider routing. Included models: Mistral, Moonshot, DeepSeek, OpenAI, and xAI.
+- Next.js App Router, React, TypeScript
+- Vercel AI SDK and AI Gateway
+- Tailwind CSS 4, Radix UI/shadcn component foundations, Lucide icons
+- Auth.js, Drizzle ORM, PostgreSQL, optional Redis and Vercel Blob integrations already present in the template
 
-### AI Gateway Authentication
+## Environment
 
-**For Vercel deployments**: Authentication is handled automatically via OIDC tokens.
+Review `.env.example`. Set up the required environment variables in your deployment platform; never commit production secrets. The chat route expects the model provider configuration already included in `lib/ai/providers.ts`. For persistent accounts and history, configure the database and run migrations as described below.
 
-**For non-Vercel deployments**: You need to provide an AI Gateway API key by setting the `AI_GATEWAY_API_KEY` environment variable in your `.env.local` file.
+## Local development
 
-With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to direct LLM providers like [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://ai-sdk.dev/providers/ai-sdk-providers) with just a few lines of code.
-
-## Deploy Your Own
-
-You can deploy your own version of Chatbot to Vercel with one click:
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/templates/next.js/chatbot)
-
-## Running locally
-
-You will need to use the environment variables [defined in `.env.example`](.env.example) to run Chatbot. It's recommended you use [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables) for this, but a `.env` file is all that is necessary.
-
-> Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various AI and authentication provider accounts.
-
-1. Install Vercel CLI: `npm i -g vercel`
-2. Link local instance with Vercel and GitHub accounts (creates `.vercel` directory): `vercel link`
-3. Download your environment variables: `vercel env pull`
+Use Node.js supported by the installed Next.js release and pnpm.
 
 ```bash
 pnpm install
-pnpm db:migrate # Setup database or apply latest database changes
+cp .env.example .env.local
+# Fill in valid values for the services you use
+pnpm db:migrate
 pnpm dev
 ```
 
-Your app template should now be running on [localhost:3000](http://localhost:3000).
+Open http://localhost:3000.
+
+## Build
+
+```bash
+pnpm check
+pnpm build
+```
+
+A production build requires compatible environment configuration. Never add secrets directly to source code or client-side variables.
+
+## Grace AI brand
+
+- Product: Grace AI
+- Short name: Grace
+- Tagline: Think clearly. Make something meaningful.
+- Visual identity: near-black surfaces, soft violet light, restrained blue accents, readable typography and reduced-motion-aware transitions
+
+## Roadmap
+
+1. Grace AI brand and responsive conversation workspace
+2. Verified model configuration and graceful provider failures
+3. Persistent conversation search and renaming
+4. Real attachment parsing and multimodal prompts
+5. Explicit web-search integration with sourced results
+6. User preferences, export/delete controls, and usage limits
+7. Automated accessibility, unit, and browser tests
