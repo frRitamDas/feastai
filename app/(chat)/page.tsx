@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import { useChat } from "@ai-sdk/react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
   ChevronDown,
-  Command,
-  FileUp,
   Globe2,
   Menu,
   MessageSquarePlus,
@@ -56,7 +54,7 @@ export default function Page() {
   }, [messages]);
   useEffect(() => {
     const element = textareaRef.current;
-    if (!element) return;
+    if (!element) { return; }
     element.style.height = "0px";
     element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
   }, [input]);
@@ -73,7 +71,7 @@ export default function Page() {
   function submit(event?: React.FormEvent) {
     event?.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busy) { return; }
     setInput("");
     sendMessage({ text: trimmed });
   }
@@ -129,7 +127,7 @@ export default function Page() {
             <Composer input={input} setInput={setInput} submit={submit} busy={busy} stop={stop} textareaRef={textareaRef} webSearch={webSearch} setWebSearch={setWebSearch}/>
             <p className="mt-3 text-center text-[10px] text-muted-foreground/75">Grace can make mistakes. Check important information.</p>
           </div>
-        </div> : <div className="flex min-h-0 flex-1 flex-col overflow-hidden"><div className="flex-1 overflow-y-auto px-4 py-8 sm:px-8"><div className="mx-auto max-w-[760px] space-y-8">{messages.map((message) => { const text = getText(message); const isUser = message.role === "user"; return <article key={message.id} className={`flex gap-3 sm:gap-4 ${isUser ? "flex-row-reverse" : ""}`}><div className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${isUser ? "bg-secondary text-foreground" : "grace-orb text-white"}`}>{isUser ? <span className="text-[11px] font-semibold">Y</span> : <Sparkles size={15}/>}</div><div className={`min-w-0 max-w-[88%] ${isUser ? "rounded-2xl rounded-tr-md bg-secondary/90 px-4 py-3" : "flex-1 pt-1"}`}><div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">{isUser ? "You" : "Grace"}</div><div className="whitespace-pre-wrap break-words text-[14px] leading-7 sm:text-[15px]">{text || (busy && !isUser ? <span className="inline-flex items-center gap-2 text-muted-foreground"><span className="size-1.5 animate-bounce rounded-full bg-primary"/><span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:120ms]"/><span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:240ms]"/> Thinking</span> : null)}</div>{!isUser && text && <div className="mt-3 flex items-center gap-1"><button type="button" onClick={() => void copyText(message.id, text)} className="rounded-lg p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground" aria-label="Copy response">{copiedId === message.id ? <Check size={14}/> : <Command size={14}/>}</button></div>}</div></article>; })}<div ref={bottomRef}/>{error && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">Grace couldn’t complete that response. Check your connection or model configuration and try again.</div>}</div></div><div className="shrink-0 px-3 pb-4 pt-2 sm:px-6"><div className="mx-auto max-w-[760px]"><Composer input={input} setInput={setInput} submit={submit} busy={busy} stop={stop} textareaRef={textareaRef} webSearch={webSearch} setWebSearch={setWebSearch}/><p className="mt-2 text-center text-[10px] text-muted-foreground/65">Grace AI · Helpful, thoughtful, not infallible.</p></div></div></div>}
+        </div> : <div className="flex min-h-0 flex-1 flex-col overflow-hidden"><div className="flex-1 overflow-y-auto px-4 py-8 sm:px-8"><div className="mx-auto max-w-[760px] space-y-8">{messages.map((message) => { const text = getText(message); const isUser = message.role === "user"; return <article key={message.id} className={`flex gap-3 sm:gap-4 ${isUser ? "flex-row-reverse" : ""}`}><div className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${isUser ? "bg-secondary text-foreground" : "grace-orb text-white"}`}>{isUser ? <span className="text-[11px] font-semibold">Y</span> : <Sparkles size={15}/>}</div><div className={`min-w-0 max-w-[88%] ${isUser ? "rounded-2xl rounded-tr-md bg-secondary/90 px-4 py-3" : "flex-1 pt-1"}`}><div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">{isUser ? "You" : "Grace"}</div><div className="whitespace-pre-wrap break-words text-[14px] leading-7 sm:text-[15px]">{text || (busy && !isUser ? <span className="inline-flex items-center gap-2 text-muted-foreground"><span className="size-1.5 animate-bounce rounded-full bg-primary"/><span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:120ms]"/><span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:240ms]"/> Thinking</span> : null)}</div>{!isUser && text && <div className="mt-3 flex items-center gap-1"><button type="button" onClick={() => void copyText(message.id, text)} className="rounded-lg p-2 text-muted-foreground transition hover:bg-accent hover:text-foreground" aria-label="Copy response">{copiedId === message.id ? <Check size={14}/> : <Check size={14}/>}</button></div>}</div></article>; })}<div ref={bottomRef}/>{error && <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">Grace couldn’t complete that response. Check your connection or model configuration and try again.</div>}</div></div><div className="shrink-0 px-3 pb-4 pt-2 sm:px-6"><div className="mx-auto max-w-[760px]"><Composer input={input} setInput={setInput} submit={submit} busy={busy} stop={stop} textareaRef={textareaRef} webSearch={webSearch} setWebSearch={setWebSearch}/><p className="mt-2 text-center text-[10px] text-muted-foreground/65">Grace AI · Helpful, thoughtful, not infallible.</p></div></div></div>}
       </section>
     </main>
   );
