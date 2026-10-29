@@ -3,6 +3,7 @@
 import {
   MessageSquareIcon,
   PanelLeftIcon,
+  SparklesIcon,
   PenSquareIcon,
   TrashIcon,
 } from "lucide-react";
@@ -91,10 +92,10 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                 <SidebarMenuButton
                   asChild
                   className="size-8 !px-0 items-center justify-center group-data-[collapsible=icon]:group-hover/logo:opacity-0"
-                  tooltip="Chatbot"
+                  tooltip="Grace AI"
                 >
                   <Link href="/" onClick={closeMobile}>
-                    <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
+                    <SparklesIcon className="size-4 text-sidebar-primary" />
                   </Link>
                 </SidebarMenuButton>
                 <Tooltip>
