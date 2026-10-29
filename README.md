@@ -1,71 +1,27 @@
-<a href="https://chatbot.ai-sdk.dev/demo">
-  <img alt="Chatbot" src="app/(chat)/opengraph-image.png">
-  <h1 align="center">Chatbot</h1>
-</a>
+# Grace AI
 
-<p align="center">
-    Chatbot (formerly AI Chatbot) is a free, open-source template built with Next.js and the AI SDK that helps you quickly build powerful chatbot applications.
-</p>
+Think clearly. Create freely. Grace AI is an AI workspace by Ritam Das, developed under Huracan.
 
-<p align="center">
-  <a href="https://chatbot.ai-sdk.dev/docs"><strong>Read Docs</strong></a> ·
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#model-providers"><strong>Model Providers</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running locally</strong></a>
-</p>
-<br/>
+## Current implementation and limitations
 
-## Features
+This repository currently contains a Next.js App Router chat application using Auth.js credentials, Drizzle/PostgreSQL, and the Vercel AI SDK's AI Gateway. It supports streaming, conversation history, and image attachments through its existing routes. The model list is configured in source, not verified dynamically against a credential. Gateway access requires its own configuration and may incur costs.
 
-- [Next.js](https://nextjs.org) App Router
-  - Advanced routing for seamless navigation and performance
-  - React Server Components (RSCs) and Server Actions for server-side rendering and increased performance
-- [AI SDK](https://ai-sdk.dev/docs/introduction)
-  - Unified API for generating text, structured objects, and tool calls with LLMs
-  - Hooks for building dynamic chat and generative user interfaces
-  - Supports OpenAI, Anthropic, Google, xAI, and other model providers via AI Gateway
-- [shadcn/ui](https://ui.shadcn.com)
-  - Styling with [Tailwind CSS](https://tailwindcss.com)
-  - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
-- Data Persistence
-  - [Neon Serverless Postgres](https://vercel.com/marketplace/neon) for saving chat history and user data
-  - [Vercel Blob](https://vercel.com/storage/blob) for efficient file storage
-- [Auth.js](https://authjs.dev)
-  - Simple and secure authentication
+**Not production-ready:** the requested administrator control plane, encrypted provider vault, dynamic provider discovery, key permissions, multi-provider failover, MFA and CAPTCHA-backed administrator authentication are not implemented. Existing Auth.js authentication does not provide email verification or password reset. Guest sessions and rate limiting require further security review before public deployment. Do not treat the requested hostname as live until independently verified.
 
-## Model Providers
+## Setup
 
-This template uses the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) to access multiple AI models through a unified interface. Models are configured in `lib/ai/models.ts` with per-model provider routing. Included models: Mistral, Moonshot, DeepSeek, OpenAI, and xAI.
+Use Node.js 22+ and pnpm 10.32.1. Copy `.env.example` to `.env.local` and supply the required values privately. Install with `corepack pnpm install --frozen-lockfile`. Run `corepack pnpm db:migrate` only against a verified database after reviewing the migration and backup plan; build no longer runs migrations automatically. Start with `corepack pnpm dev`. Without PostgreSQL, Auth.js cannot create users or persist chats. Vercel Blob is needed for uploads; Redis is needed for distributed IP throttling and resumable streams. AI Gateway requires credentials outside Vercel or an appropriate Vercel OIDC setup.
 
-### AI Gateway Authentication
+## Validation
 
-**For Vercel deployments**: Authentication is handled automatically via OIDC tokens.
+Run `corepack pnpm check`, `corepack pnpm exec tsc --noEmit`, `corepack pnpm test:unit`, `corepack pnpm test`, and `corepack pnpm build`. Browser tests need the credentials described in `playwright.config.ts` and a working database. A successful build alone does not prove production readiness.
 
-**For non-Vercel deployments**: You need to provide an AI Gateway API key by setting the `AI_GATEWAY_API_KEY` environment variable in your `.env.local` file.
+## Deployment and recovery
 
-With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to direct LLM providers like [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://ai-sdk.dev/providers/ai-sdk-providers) with just a few lines of code.
+See [operations](docs/operations/release-and-recovery.md). Never commit secrets. Configure deployment secrets through the hosting provider. Do not promote a release without testing authentication, authorization, persistence, model access and rollback on an isolated environment. The existing database schema must be reviewed for RLS before exposing it through Supabase APIs.
 
-## Deploy Your Own
+This project builds on the Vercel AI SDK chatbot foundation; retain the repository's license and upstream attribution in legal notices.
 
-You can deploy your own version of Chatbot to Vercel with one click:
+## Provider foundations (not yet wired into chat)
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/templates/next.js/chatbot)
-
-## Running locally
-
-You will need to use the environment variables [defined in `.env.example`](.env.example) to run Chatbot. It's recommended you use [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables) for this, but a `.env` file is all that is necessary.
-
-> Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various AI and authentication provider accounts.
-
-1. Install Vercel CLI: `npm i -g vercel`
-2. Link local instance with Vercel and GitHub accounts (creates `.vercel` directory): `vercel link`
-3. Download your environment variables: `vercel env pull`
-
-```bash
-pnpm install
-pnpm db:migrate # Setup database or apply latest database changes
-pnpm dev
-```
-
-Your app template should now be running on [localhost:3000](http://localhost:3000).
+Server-only modules include AES-256-GCM credential envelope helpers and bounded model-list discovery for Groq, OpenRouter, Cerebras, SambaNova and Mistral. Discovery results do not prove a key can run a model, and OpenRouter may return a public catalog without validating the key. No credentials or catalog are persisted and no administrator APIs or UI use these modules yet. Do not deploy them as a working vault. The future vault must provide a separately managed, base64-encoded 32-byte encryption key and a tested key rotation procedure; it must never share the authentication secret. Custom endpoints, Google and Cloudflare require separate adapters and SSRF protections.

@@ -90,7 +90,7 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "pnpm dev",
+    command: "corepack pnpm dev",
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
     url: `${baseURL}/ping`,

@@ -67,18 +67,24 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     setShowDeleteAllDialog(true);
   }, []);
 
-  const handleDeleteAll = useCallback(() => {
+  const handleDeleteAll = useCallback(async () => {
     setShowDeleteAllDialog(false);
-    router.replace("/");
-    mutate(unstable_serialize(getChatHistoryPaginationKey), [], {
-      revalidate: false,
-    });
-
-    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history`, {
-      method: "DELETE",
-    });
-
-    toast.success("All chats deleted");
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        throw new Error("Could not delete conversations");
+      }
+      await mutate(unstable_serialize(getChatHistoryPaginationKey), [], {
+        revalidate: false,
+      });
+      router.replace("/");
+      toast.success("All chats deleted");
+    } catch {
+      toast.error("Could not delete conversations. Please try again.");
+    }
   }, [mutate, router]);
 
   return (
@@ -91,10 +97,13 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                 <SidebarMenuButton
                   asChild
                   className="size-8 !px-0 items-center justify-center group-data-[collapsible=icon]:group-hover/logo:opacity-0"
-                  tooltip="Chatbot"
+                  tooltip="Grace AI"
                 >
                   <Link href="/" onClick={closeMobile}>
-                    <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
+                    <MessageSquareIcon
+                      aria-label="Grace AI"
+                      className="size-4 text-primary"
+                    />
                   </Link>
                 </SidebarMenuButton>
                 <Tooltip>
