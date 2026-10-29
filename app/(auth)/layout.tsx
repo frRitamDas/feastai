@@ -15,7 +15,7 @@ export default function AuthLayout({
         </Link>
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-12">
           <Link href="/" className="mb-10 flex items-center gap-3">
-            <span className="grace-orb flex size-11 items-center justify-center rounded-2xl"><Sparkles size={19} className="text-white" /></span>
+            <span className="grace-orb flex size-11 items-center justify-center rounded-2xl"><Sparkles className="text-white" size={19} /></span>
             <span className="text-2xl font-semibold tracking-[-.055em]">grace<span className="text-primary">.</span></span>
           </Link>
           <div className="flex flex-col gap-2">{children}</div>
