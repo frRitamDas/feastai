@@ -30,6 +30,27 @@ export const user = pgTable("User", {
 
 export type User = InferSelectModel<typeof user>;
 
+export const graceUserPolicy = pgTable("GraceUserPolicy", {
+  enabled: boolean("enabled").notNull().default(true),
+  hourlyQuota: integer("hourlyQuota").notNull().default(10),
+  plan: varchar("plan", { length: 32 }).notNull().default("free"),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+});
+export const graceQuotaCounter = pgTable("GraceQuotaCounter", {
+  count: integer("count").notNull(),
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  windowStart: timestamp("windowStart", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const chat = pgTable("Chat", {
   createdAt: timestamp("createdAt").notNull(),
   id: uuid("id").primaryKey().notNull().defaultRandom(),

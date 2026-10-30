@@ -41,10 +41,12 @@ const bodySchema = z
       .optional(),
     credential: z.string().min(1).max(8192).optional(),
     enabled: z.boolean().optional(),
+    hourlyQuota: z.number().int().min(1).max(1000).optional(),
     keyId: uuid.optional(),
     label: z.string().trim().min(1).max(100).optional(),
     modelId: uuid.optional(),
     name: z.string().trim().min(1).max(300).optional(),
+    plan: z.enum(["free", "custom"]).optional(),
     priority: z.number().int().min(0).max(100).optional(),
     provider: z
       .enum([
@@ -84,7 +86,7 @@ export async function GET(_request: Request, context: Context) {
       'SELECT count(*)::int AS "completedCalls", sum("inputTokens")::bigint AS "inputTokens", sum("outputTokens")::bigint AS "outputTokens", count(*) FILTER (WHERE "inputTokens" IS NULL OR "outputTokens" IS NULL)::int AS "incompleteReports" FROM "GraceUsageEvent"'
     );
     const users = await db.query(
-      'SELECT u."id", u."email", u."createdAt", u."isAnonymous", a."role" AS "adminRole", a."enabled" AS "adminEnabled" FROM "User" u LEFT JOIN "GraceAdministrator" a ON a."userId" = u."id" ORDER BY u."createdAt" DESC LIMIT 100'
+      'SELECT u."id", u."email", u."createdAt", u."isAnonymous", a."role" AS "adminRole", a."enabled" AS "adminEnabled", COALESCE(p."enabled", true) AS "accountEnabled", COALESCE(p."hourlyQuota", 10) AS "hourlyQuota", COALESCE(p."plan", \'free\') AS "plan" FROM "User" u LEFT JOIN "GraceAdministrator" a ON a."userId" = u."id" LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" ORDER BY u."createdAt" DESC LIMIT 100'
     );
     const logs = await db.query(
       'SELECT "id", "actorId", "action", "target", "outcome", "createdAt" FROM "GraceAdminAudit" ORDER BY "createdAt" DESC LIMIT 100'
@@ -231,7 +233,7 @@ export async function POST(request: Request, context: Context) {
         );
         const rows = await getAdminDatabase().query(
           `INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret")
-           SELECT "id", $2, $3::jsonb FROM "User" WHERE "id" = $1 AND "isAnonymous" = false
+           SELECT u."id", $2, $3::jsonb FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1 AND u."isAnonymous" = false AND COALESCE(p."enabled", true)
            ON CONFLICT ("userId") DO UPDATE SET "role" = EXCLUDED."role", "totpSecret" = EXCLUDED."totpSecret", "enabled" = true, "lastTotpStep" = -1, "updatedAt" = now()
            RETURNING "userId"`,
           [data.userId, data.role, JSON.stringify(encrypted)]
@@ -247,6 +249,39 @@ export async function POST(request: Request, context: Context) {
         if (!rows.length) {
           return reply({ error: "Administrator not found" }, 404);
         }
+      }
+      await audit(admin.userId, action, data.userId, "success");
+      return reply({ ok: true });
+    }
+    if (action === "set-user-policy") {
+      if (
+        admin.role !== "owner" ||
+        !data.userId ||
+        data.userId === admin.userId
+      ) {
+        return reply({ error: "Not authorized" }, 403);
+      }
+      if (
+        data.enabled === undefined ||
+        data.hourlyQuota === undefined ||
+        !data.plan
+      ) {
+        return reply({ error: "Invalid request" }, 400);
+      }
+      const rows = await getAdminDatabase().query(
+        `INSERT INTO "GraceUserPolicy" ("userId", "enabled", "hourlyQuota", "plan")
+         SELECT u."id", $2, $3, $4 FROM "User" u
+         WHERE u."id" = $1 AND NOT EXISTS
+           (SELECT 1 FROM "GraceAdministrator" a WHERE a."userId" = u."id" AND a."enabled" = true)
+         ON CONFLICT ("userId") DO UPDATE SET "enabled" = EXCLUDED."enabled", "hourlyQuota" = EXCLUDED."hourlyQuota", "plan" = EXCLUDED."plan", "updatedAt" = now()
+         RETURNING "userId"`,
+        [data.userId, data.enabled, data.hourlyQuota, data.plan]
+      );
+      if (!rows.length) {
+        return reply(
+          { error: "Account not found or is an active administrator" },
+          400
+        );
       }
       await audit(admin.userId, action, data.userId, "success");
       return reply({ ok: true });

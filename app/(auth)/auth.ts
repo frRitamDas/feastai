@@ -4,7 +4,7 @@ import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { DUMMY_PASSWORD } from "@/lib/constants";
-import { createGuestUser, getUser } from "@/lib/db/queries";
+import { createGuestUser, getUser, isUserEnabled } from "@/lib/db/queries";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { authConfig } from "./auth.config";
 
@@ -40,12 +40,15 @@ export const {
 } = NextAuth({
   ...authConfig,
   callbacks: {
-    jwt({ token, user }) {
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id as string;
         token.type = user.type;
       }
 
+      if (!token.id || !(await isUserEnabled(token.id))) {
+        return null;
+      }
       return token;
     },
     session({ session, token }) {

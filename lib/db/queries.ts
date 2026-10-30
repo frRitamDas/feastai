@@ -19,6 +19,7 @@ import type { ArtifactKind } from "@/components/chat/artifact";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { ChatbotError } from "../errors";
 import { escapeSearchTerm } from "../server/conversations/search";
+import { RESERVE_QUOTA_SQL } from "../server/security/quota";
 import { RATE_LIMIT_SQL } from "../server/security/rate-limit";
 import { generateUUID } from "../utils";
 import {
@@ -38,6 +39,19 @@ import { generateHashedPassword } from "./utils";
 
 const client = postgres(process.env.POSTGRES_URL ?? "");
 const db = drizzle(client);
+
+export async function isUserEnabled(id: string): Promise<boolean> {
+  const rows = await client.unsafe<{ enabled: boolean }[]>(
+    'SELECT COALESCE(p."enabled", true) AS "enabled" FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1',
+    [id]
+  );
+  return rows[0]?.enabled === true;
+}
+
+export async function reserveChatQuota(id: string): Promise<boolean> {
+  const rows = await client.unsafe(RESERVE_QUOTA_SQL, [id]);
+  return rows.length === 1;
+}
 
 export async function getUser(email: string): Promise<User[]> {
   try {

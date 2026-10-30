@@ -57,6 +57,9 @@ type Overview = {
     createdAt: string;
     adminRole: "owner" | "operator" | "viewer" | null;
     adminEnabled: boolean | null;
+    accountEnabled: boolean;
+    hourlyQuota: number;
+    plan: "free" | "custom";
   }[];
   logs: {
     id: string;
@@ -97,6 +100,10 @@ export function AdminConsole({ verified }: { verified: boolean }) {
   const [adminUserId, setAdminUserId] = useState("");
   const [adminRole, setAdminRole] = useState("viewer");
   const [adminTotp, setAdminTotp] = useState("");
+  const [policyUser, setPolicyUser] = useState("");
+  const [policyQuota, setPolicyQuota] = useState("10");
+  const [policyPlan, setPolicyPlan] = useState("free");
+  const [policyEnabled, setPolicyEnabled] = useState(true);
   const refresh = useCallback(async () => {
     const response = await fetch("/api/administrator/overview", {
       cache: "no-store",
@@ -774,6 +781,84 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     </form>
                   </div>
                 )}
+                {data.role === "owner" && (
+                  <form
+                    className="mb-6 grid gap-3 rounded-2xl border p-5 md:grid-cols-5"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await action("set-user-policy", {
+                        enabled: policyEnabled,
+                        hourlyQuota: Number(policyQuota),
+                        plan: policyPlan,
+                        userId: policyUser,
+                      });
+                    }}
+                  >
+                    <select
+                      aria-label="Account policy user"
+                      className="rounded-lg border bg-background px-3"
+                      onChange={(event) => {
+                        const selected = data.users.find(
+                          (user) => user.id === event.target.value
+                        );
+                        setPolicyUser(event.target.value);
+                        if (selected) {
+                          setPolicyQuota(String(selected.hourlyQuota));
+                          setPolicyPlan(selected.plan);
+                          setPolicyEnabled(selected.accountEnabled);
+                        }
+                      }}
+                      required
+                      value={policyUser}
+                    >
+                      <option value="">Select account</option>
+                      {data.users
+                        .filter((user) => !user.adminEnabled)
+                        .map((user) => (
+                          <option key={user.id} value={user.id}>
+                            {user.email}
+                          </option>
+                        ))}
+                    </select>
+                    <Input
+                      aria-label="Hourly request quota"
+                      max="1000"
+                      min="1"
+                      onChange={(event) => setPolicyQuota(event.target.value)}
+                      required
+                      type="number"
+                      value={policyQuota}
+                    />
+                    <select
+                      aria-label="Plan"
+                      className="rounded-lg border bg-background px-3"
+                      onChange={(event) => setPolicyPlan(event.target.value)}
+                      value={policyPlan}
+                    >
+                      <option value="free">Free</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                    <select
+                      aria-label="Account access"
+                      className="rounded-lg border bg-background px-3"
+                      onChange={(event) =>
+                        setPolicyEnabled(event.target.value === "enabled")
+                      }
+                      value={policyEnabled ? "enabled" : "disabled"}
+                    >
+                      <option value="enabled">Enabled</option>
+                      <option value="disabled">Disabled</option>
+                    </select>
+                    <Button disabled={busy} type="submit">
+                      Save policy
+                    </Button>
+                    <p className="text-sm text-muted-foreground md:col-span-5">
+                      Per-account hourly generation requests. Network limits
+                      still apply. Plans are labels only; no billing is
+                      connected.
+                    </p>
+                  </form>
+                )}
                 <h2 className="font-semibold">Recent users</h2>
                 <p className="text-sm text-muted-foreground">
                   Showing the latest 100 accounts.
@@ -783,7 +868,11 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     className="flex justify-between gap-3 border-b py-3 text-sm"
                     key={user.id}
                   >
-                    <span>{user.email}</span>
+                    <span>
+                      {user.email} ·{" "}
+                      {user.accountEnabled ? "enabled" : "disabled"} ·{" "}
+                      {user.plan} · {user.hourlyQuota}/hour
+                    </span>
                     <span className="text-muted-foreground">
                       {user.isAnonymous
                         ? "Guest"

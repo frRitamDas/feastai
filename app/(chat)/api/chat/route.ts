@@ -11,8 +11,7 @@ import {
 import { checkBotId } from "botid/server";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { auth, type UserType } from "@/app/(auth)/auth";
-import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { auth } from "@/app/(auth)/auth";
 import {
   allowedModelIds,
   chatModels,
@@ -31,9 +30,9 @@ import {
   createStreamId,
   deleteChatById,
   getChatById,
-  getMessageCountByUserId,
   getMessagesByChatId,
   recordUsage,
+  reserveChatQuota,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -91,7 +90,7 @@ export async function POST(request: Request) {
       auth(),
     ]);
 
-    if (botIdResult?.isBot) {
+    if (botIdResult?.isBot || (isProductionEnvironment && !botIdResult)) {
       return new ChatbotError("forbidden:api").toResponse();
     }
 
@@ -152,17 +151,6 @@ export async function POST(request: Request) {
     const [sharedModel] = sharedModels;
     const chatModel = selectedChatModel;
 
-    const userType: UserType = session.user.type;
-
-    const messageCount = await getMessageCountByUserId({
-      differenceInHours: 1,
-      id: session.user.id,
-    });
-
-    if (messageCount >= entitlementsByUserType[userType].maxMessagesPerHour) {
-      return new ChatbotError("rate_limit:chat").toResponse();
-    }
-
     const isToolApprovalFlow = Boolean(messages);
 
     const chat = await getChatById({ id });
@@ -174,7 +162,11 @@ export async function POST(request: Request) {
         return new ChatbotError("forbidden:chat").toResponse();
       }
       messagesFromDb = await getMessagesByChatId({ id });
-    } else if (message?.role === "user") {
+    }
+    if (!(await reserveChatQuota(session.user.id))) {
+      return new ChatbotError("rate_limit:chat").toResponse();
+    }
+    if (!chat && message?.role === "user") {
       await saveChat({
         id,
         title: "New chat",
