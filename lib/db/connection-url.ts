@@ -35,6 +35,8 @@ export function resolveDatabaseUrl(url: string, poolerHost?: string): string {
   connection.hostname = poolerHost;
   connection.port = "5432"; // Session pooling supports prepared statements.
   connection.username = `${decodeURIComponent(connection.username)}.${direct[1]}`;
-  connection.searchParams.set("sslmode", "require");
+  // postgres.js treats "require" as encryption without certificate checking;
+  // verify-full also authenticates the Supabase pooler's certificate/hostname.
+  connection.searchParams.set("sslmode", "verify-full");
   return connection.toString();
 }

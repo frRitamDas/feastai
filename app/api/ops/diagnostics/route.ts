@@ -93,10 +93,10 @@ export async function GET(request: Request) {
     }
   }
   const encryption = process.env.GRACE_ENCRYPTION_KEY ?? "";
-  const encryptionKeyFormat = /^[A-Fa-f0-9]{64}$/.test(encryption)
-    ? "hex-32"
-    : /^[A-Za-z0-9+/]{43}=$/.test(encryption) &&
-        Buffer.from(encryption, "base64").length === 32
+  const encryptionKeyFormat =
+    /^[A-Za-z0-9+/]{43}=$/.test(encryption) &&
+    Buffer.from(encryption, "base64").length === 32 &&
+    Buffer.from(encryption, "base64").toString("base64") === encryption
       ? "base64-32"
       : "other";
   return Response.json(
