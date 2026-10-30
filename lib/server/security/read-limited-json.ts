@@ -1,8 +1,8 @@
 /** Bound actual streamed bytes, not merely an untrusted Content-Length header. */
-export async function readLimitedJson(
+export async function readLimitedBytes(
   request: Request,
   maxBytes: number
-): Promise<unknown> {
+): Promise<Buffer> {
   const reader = request.body?.getReader();
   if (!reader) {
     throw new Error("Missing request body");
@@ -22,5 +22,14 @@ export async function readLimitedJson(
     }
     chunks.push(value);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks);
+}
+
+export async function readLimitedJson(
+  request: Request,
+  maxBytes: number
+): Promise<unknown> {
+  return JSON.parse(
+    (await readLimitedBytes(request, maxBytes)).toString("utf8")
+  );
 }

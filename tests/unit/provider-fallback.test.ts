@@ -121,12 +121,16 @@ test("automatic routes switch to an explicitly configured different provider bef
     );
     return Promise.resolve(eventStream());
   };
+  let selected: { provider: string; upstreamId: string } | undefined;
   const route = createFallbackModel(
     [
       { credential: "groq", provider: "groq", upstreamId: "model-a" },
       { credential: "google", provider: "gemini", upstreamId: "model-b" },
     ],
-    request
+    request,
+    (candidate) => {
+      selected = candidate;
+    }
   );
   const result = streamText({ maxRetries: 0, model: route, prompt: "Hello" });
   let text = "";
@@ -134,6 +138,7 @@ test("automatic routes switch to an explicitly configured different provider bef
     text += chunk;
   }
   assert.equal(text, "OK");
+  assert.deepEqual(selected, { provider: "gemini", upstreamId: "model-b" });
   assert.equal(used.length, 2);
   assert.ok(used[0].endsWith(":model-a"));
   assert.ok(used[1].endsWith(":model-b"));

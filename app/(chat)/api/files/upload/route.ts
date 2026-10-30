@@ -1,73 +1,65 @@
-import { put } from "@vercel/blob";
-import { NextResponse } from "next/server";
-import { z } from "zod";
-
+import { ipAddress } from "@vercel/functions";
 import { auth } from "@/app/(auth)/auth";
-import { isProductionEnvironment } from "@/lib/constants";
-
-const FileSchema = z.object({
-  file: z
-    .instanceof(Blob)
-    .refine((file) => file.size <= 5 * 1024 * 1024, {
-      message: "File size should be less than 5MB",
-    })
-    .refine((file) => ["image/jpeg", "image/png"].includes(file.type), {
-      message: "File type should be JPEG or PNG",
-    }),
-});
+import { savePrivateAttachment } from "@/lib/db/queries";
+import { enforceIpRateLimit } from "@/lib/ratelimit";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import { isSafeImage, isSafeText } from "@/lib/server/security/attachments";
+import { readLimitedBytes } from "@/lib/server/security/read-limited-json";
 
 export async function POST(request: Request) {
-  if (isProductionEnvironment) {
-    return NextResponse.json(
-      { error: "Attachments are temporarily unavailable." },
-      { status: 503 }
-    );
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return Response.json({ error: "Invalid origin" }, { status: 403 });
   }
   const session = await auth();
-
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.user?.id) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  if (request.body === null) {
-    return new Response("Request body is empty", { status: 400 });
-  }
-
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as Blob;
-
-    if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    await enforceIpRateLimit(ipAddress(request), "upload");
+    await enforceIpRateLimit(session.user.id, "upload");
+    const body = await readLimitedBytes(request, 2 * 1024 * 1024 + 16_384);
+    const multipart = new Request(request.url, {
+      body,
+      headers: { "Content-Type": request.headers.get("content-type") ?? "" },
+      method: "POST",
+    });
+    const form = await multipart.formData();
+    const file = form.get("file");
+    if (!(file instanceof File) || file.name.length > 100) {
+      return Response.json({ error: "Invalid image" }, { status: 400 });
     }
-
-    const validatedFile = FileSchema.safeParse({ file });
-
-    if (!validatedFile.success) {
-      const errorMessage = validatedFile.error.issues
-        .map((error) => error.message)
-        .join(", ");
-
-      return NextResponse.json({ error: errorMessage }, { status: 400 });
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (!(isSafeImage(bytes, file.type) || isSafeText(bytes, file.type))) {
+      return Response.json(
+        {
+          error:
+            "Use a JPEG/PNG image up to 2 MB or UTF-8 text file up to 32 KB.",
+        },
+        { status: 400 }
+      );
     }
-
-    const filename = (formData.get("file") as File).name;
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const fileBuffer = await file.arrayBuffer();
-
-    try {
-      const data = await put(`${safeName}`, fileBuffer, {
-        access: "public",
-      });
-
-      return NextResponse.json(data);
-    } catch {
-      return NextResponse.json({ error: "Upload failed" }, { status: 500 });
-    }
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to process request" },
-      { status: 500 }
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "image";
+    const id = await savePrivateAttachment(
+      session.user.id,
+      safeName,
+      file.type,
+      bytes
     );
+    if (!id) {
+      return Response.json(
+        { error: "Attachment storage quota reached." },
+        { status: 413 }
+      );
+    }
+    return Response.json(
+      {
+        contentType: file.type,
+        pathname: safeName,
+        url: new URL(`/api/files/${id}`, request.url).toString(),
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch {
+    return Response.json({ error: "Upload unavailable" }, { status: 503 });
   }
 }

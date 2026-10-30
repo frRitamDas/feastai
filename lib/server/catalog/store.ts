@@ -88,7 +88,7 @@ export class CatalogStore {
       this.encryptionKey
     );
     await this.db.query(
-      'INSERT INTO "GraceProviderKey" ("id", "provider", "label", "encryptedCredential") VALUES ($1, $2, $3, $4::jsonb)',
+      'INSERT INTO "GraceProviderKey" ("id", "provider", "label", "encryptedCredential") VALUES ($1, $2, $3, $4::text::jsonb)',
       [id, input.provider, label, JSON.stringify(envelope)]
     );
     return id;
@@ -141,7 +141,7 @@ export class CatalogStore {
       const payload = JSON.stringify(result.models);
       await tx.query(
         `INSERT INTO "GraceModel" ("provider", "upstreamId", "name")
-         SELECT $1, m.id, m.name FROM jsonb_to_recordset($2::jsonb) AS m(id text, name text)
+         SELECT $1, m.id, m.name FROM jsonb_to_recordset($2::text::jsonb) AS m(id text, name text)
          ON CONFLICT ("provider", "upstreamId") DO UPDATE
          SET "name" = EXCLUDED."name", "lastDiscoveredAt" = now()`,
         [row.provider, payload]
@@ -149,7 +149,7 @@ export class CatalogStore {
       await tx.query(
         `UPDATE "GraceKeyModel" SET "permitted" = false, "available" = false, "verifiedAt" = NULL
          WHERE "keyId" = $1 AND NOT EXISTS (
-           SELECT 1 FROM "GraceModel" m JOIN jsonb_to_recordset($2::jsonb) AS d(id text, name text)
+           SELECT 1 FROM "GraceModel" m JOIN jsonb_to_recordset($2::text::jsonb) AS d(id text, name text)
            ON m."upstreamId" = d.id WHERE m."id" = "GraceKeyModel"."modelId"
          )`,
         [keyId, payload]
@@ -157,7 +157,7 @@ export class CatalogStore {
       await tx.query(
         `INSERT INTO "GraceKeyModel" ("keyId", "modelId", "provider", "available")
          SELECT $1::uuid, m."id", $2::varchar(32), true FROM "GraceModel" m
-         JOIN jsonb_to_recordset($3::jsonb) AS d(id text, name text) ON m."upstreamId" = d.id
+         JOIN jsonb_to_recordset($3::text::jsonb) AS d(id text, name text) ON m."upstreamId" = d.id
          WHERE m."provider" = $2::varchar(32)
          ON CONFLICT ("keyId", "modelId") DO UPDATE
          SET "available" = true, "lastDiscoveredAt" = now()`,
@@ -325,7 +325,7 @@ export class CatalogStore {
       `UPDATE "GraceKeyModel" p SET "verifiedAt" = CASE WHEN $4::text = 'success' THEN now() ELSE NULL END,
        "lastCheckAt" = now(), "lastCheckStatus" = $4, "lastLatencyMs" = $5
        FROM "GraceProviderKey" k WHERE p."keyId" = $1 AND p."modelId" = $2
-       AND p."available" = true AND k."id" = p."keyId" AND k."encryptedCredential" = $3::jsonb
+       AND p."available" = true AND k."id" = p."keyId" AND k."encryptedCredential" = $3::text::jsonb
        RETURNING p."keyId"`,
       [keyId, modelId, JSON.stringify(row.encryptedCredential), status, latency]
     );

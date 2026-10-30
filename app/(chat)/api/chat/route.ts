@@ -11,8 +11,7 @@ import {
 import { checkBotId } from "botid/server";
 import { after } from "next/server";
 import { createResumableStreamContext } from "resumable-stream";
-import { auth, type UserType } from "@/app/(auth)/auth";
-import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { auth } from "@/app/(auth)/auth";
 import {
   allowedModelIds,
   chatModels,
@@ -31,9 +30,10 @@ import {
   createStreamId,
   deleteChatById,
   getChatById,
-  getMessageCountByUserId,
   getMessagesByChatId,
+  getPrivateAttachment,
   recordUsage,
+  reserveChatQuota,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -45,6 +45,7 @@ import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
 import { createFallbackModel } from "@/lib/server/providers/fallback";
+import { attachmentId } from "@/lib/server/security/attachments";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 import { mergeToolApprovals } from "@/lib/server/security/tool-approvals";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
@@ -73,6 +74,9 @@ function getStreamContext() {
 export { getStreamContext };
 
 export async function POST(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return new ChatbotError("forbidden:api").toResponse();
+  }
   let requestBody: PostRequestBody;
 
   try {
@@ -91,7 +95,7 @@ export async function POST(request: Request) {
       auth(),
     ]);
 
-    if (botIdResult?.isBot) {
+    if (botIdResult?.isBot || (isProductionEnvironment && !botIdResult)) {
       return new ChatbotError("forbidden:api").toResponse();
     }
 
@@ -100,15 +104,6 @@ export async function POST(request: Request) {
     }
 
     await enforceIpRateLimit(ipAddress(request), "chat");
-    if (
-      isProductionEnvironment &&
-      message?.parts.some((part) => part.type === "file")
-    ) {
-      return new ChatbotError(
-        "bad_request:api",
-        "Attachments are temporarily unavailable."
-      ).toResponse();
-    }
     let sharedModels: Awaited<
       ReturnType<
         NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
@@ -152,17 +147,6 @@ export async function POST(request: Request) {
     const [sharedModel] = sharedModels;
     const chatModel = selectedChatModel;
 
-    const userType: UserType = session.user.type;
-
-    const messageCount = await getMessageCountByUserId({
-      differenceInHours: 1,
-      id: session.user.id,
-    });
-
-    if (messageCount >= entitlementsByUserType[userType].maxMessagesPerHour) {
-      return new ChatbotError("rate_limit:chat").toResponse();
-    }
-
     const isToolApprovalFlow = Boolean(messages);
 
     const chat = await getChatById({ id });
@@ -174,7 +158,11 @@ export async function POST(request: Request) {
         return new ChatbotError("forbidden:chat").toResponse();
       }
       messagesFromDb = await getMessagesByChatId({ id });
-    } else if (message?.role === "user") {
+    }
+    if (!(await reserveChatQuota(session.user.id))) {
+      return new ChatbotError("rate_limit:chat").toResponse();
+    }
+    if (!chat && message?.role === "user") {
       await saveChat({
         id,
         title: "New chat",
@@ -206,22 +194,12 @@ export async function POST(request: Request) {
     }
 
     if (
-      isProductionEnvironment &&
-      uiMessages.some((item) => item.parts.some((part) => part.type === "file"))
-    ) {
-      return new ChatbotError(
-        "bad_request:api",
-        "Conversations with attachments are temporarily unavailable."
-      ).toResponse();
-    }
-
-    if (
       sharedModel &&
       (isToolApprovalFlow ||
         uiMessages.some((item) =>
           item.parts.some(
             (part) =>
-              part.type === "file" ||
+              (part.type === "file" && part.mediaType !== "text/plain") ||
               part.type === "dynamic-tool" ||
               part.type.startsWith("tool-")
           )
@@ -232,6 +210,75 @@ export async function POST(request: Request) {
         "This model currently supports text-only conversations without tools."
       ).toResponse();
     }
+
+    const modelConfig = chatModels.find((m) => m.id === chatModel);
+    const modelCapabilities = await getCapabilities();
+    const capabilities = modelCapabilities[chatModel];
+    const isReasoningModel = capabilities?.reasoning === true;
+    const supportsTools = capabilities?.tools === true;
+    const fileParts = uiMessages.flatMap((item) =>
+      item.parts.filter((part) => part.type === "file")
+    );
+    if (
+      fileParts.length &&
+      (fileParts.length > 10 ||
+        (capabilities?.vision !== true &&
+          fileParts.some(
+            (part) => part.type === "file" && part.mediaType !== "text/plain"
+          )))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "Select a vision-capable model for images and use at most 10 attachments."
+      ).toResponse();
+    }
+    const loaded = await Promise.all(
+      fileParts.map(async (part) => {
+        if (part.type !== "file") {
+          return null;
+        }
+        const fileId = attachmentId(part.url, request.url);
+        if (!fileId) {
+          return null;
+        }
+        const file = await getPrivateAttachment(session.user.id, fileId);
+        return file?.mediaType === part.mediaType ? file : null;
+      })
+    );
+    if (
+      loaded.some((file) => !file) ||
+      loaded.reduce((total, file) => total + (file?.data.length ?? 0), 0) >
+        4 * 1024 * 1024
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "Attachments are unavailable or exceed the 4 MB conversation limit."
+      ).toResponse();
+    }
+    let fileIndex = 0;
+    const modelInput = uiMessages.map((item) => ({
+      ...item,
+      parts: item.parts.map((part) => {
+        if (part.type !== "file") {
+          return part;
+        }
+        const file = loaded[fileIndex];
+        fileIndex += 1;
+        if (!file) {
+          throw new Error("Attachment unavailable");
+        }
+        if (file.mediaType === "text/plain") {
+          return {
+            text: `Attached text file ${file.name}:\n\n${file.data.toString("utf8")}`,
+            type: "text" as const,
+          };
+        }
+        return {
+          ...part,
+          url: `data:${file.mediaType};base64,${file.data.toString("base64")}`,
+        };
+      }),
+    }));
 
     const { longitude, latitude, city, country } = geolocation(request);
 
@@ -257,14 +304,9 @@ export async function POST(request: Request) {
       });
     }
 
-    const modelConfig = chatModels.find((m) => m.id === chatModel);
-    const modelCapabilities = await getCapabilities();
-    const capabilities = modelCapabilities[chatModel];
-    const isReasoningModel = capabilities?.reasoning === true;
-    const supportsTools = capabilities?.tools === true;
+    const modelMessages = await convertToModelMessages(modelInput);
 
-    const modelMessages = await convertToModelMessages(uiMessages);
-
+    let actualProvider: { provider: string; upstreamId: string } | undefined;
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {
         const modelName = modelConfig?.name ?? chatModel;
@@ -343,7 +385,9 @@ export async function POST(request: Request) {
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
           model: sharedModel
-            ? createFallbackModel(sharedModels)
+            ? createFallbackModel(sharedModels, undefined, (selected) => {
+                actualProvider = selected;
+              })
             : getLanguageModel(chatModel),
           ...(sharedModel
             ? {
@@ -371,6 +415,8 @@ export async function POST(request: Request) {
                 inputTokens: usage.inputTokens,
                 model: chatModel,
                 outputTokens: usage.outputTokens,
+                provider: actualProvider?.provider,
+                upstreamModel: actualProvider?.upstreamId,
                 userId: session.user.id,
               });
             } catch {

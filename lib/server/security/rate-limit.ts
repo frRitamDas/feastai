@@ -12,6 +12,7 @@ ON CONFLICT ("key") DO UPDATE SET
 RETURNING "count"`;
 
 export type RateLimitScope =
+  | "upload"
   | "chat"
   | "login"
   | "guest"
@@ -25,6 +26,7 @@ export const LIMITS: Record<RateLimitScope, number> = {
   guest: 10,
   login: 20,
   register: 5,
+  upload: 30,
 };
 
 export type Counter = (key: string) => Promise<number>;

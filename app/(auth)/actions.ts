@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { createUser, getUser } from "@/lib/db/queries";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
+import { verifyRegistrationChallenge } from "@/lib/server/security/turnstile";
 
 import { signIn } from "./auth";
 
@@ -60,17 +61,37 @@ export const register = async (
 ): Promise<RegisterActionState> => {
   try {
     await enforceIpRateLimit(ipAddress(await headers()), "register");
-    const validatedData = authFormSchema.parse({
-      email: formData.get("email"),
-      password: formData.get("password"),
+    const validChallenge = await verifyRegistrationChallenge({
+      expectedHost: process.env.AUTH_URL,
+      production: process.env.NODE_ENV === "production",
+      secret: process.env.GRACE_TURNSTILE_SECRET,
+      token: formData.get("cf-turnstile-response"),
     });
+    if (!validChallenge) {
+      return { status: "failed" };
+    }
+    const validatedData = authFormSchema
+      .extend({
+        email: z.email().max(64),
+        password: z
+          .string()
+          .min(8)
+          .max(72)
+          .refine((value) => Buffer.byteLength(value) <= 72),
+      })
+      .parse({
+        email: formData.get("email"),
+        password: formData.get("password"),
+      });
 
     const [user] = await getUser(validatedData.email);
 
     if (user) {
       return { status: "user_exists" } as RegisterActionState;
     }
-    await createUser(validatedData.email, validatedData.password);
+    if (!(await createUser(validatedData.email, validatedData.password))) {
+      return { status: "user_exists" };
+    }
     await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,

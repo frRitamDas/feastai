@@ -43,7 +43,7 @@ async function main() {
         throw new Error("Owner already provisioned");
       }
       await tx.query(
-        'INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret") VALUES ($1, \'owner\', $2::jsonb)',
+        'INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret") VALUES ($1, \'owner\', $2::text::jsonb)',
         [userId, JSON.stringify(encrypted)]
       );
       await tx.query(

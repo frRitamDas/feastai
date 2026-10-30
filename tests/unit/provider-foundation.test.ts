@@ -18,6 +18,11 @@ test("credentials are encrypted, randomized and bound to their row", () => {
   assert.notEqual(first.iv, second.iv);
   assert.ok(!JSON.stringify(first).includes("example-secret"));
   assert.equal(decryptCredential(first, "key-1", key), "example-secret");
+  assert.equal(
+    decryptCredential(JSON.stringify(first), "key-1", key),
+    "example-secret"
+  );
+  assert.throws(() => decryptCredential("not JSON", "key-1", key));
   assert.throws(() => decryptCredential(first, "key-2", key));
   assert.throws(() =>
     decryptCredential(
