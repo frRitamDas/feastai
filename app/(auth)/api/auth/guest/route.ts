@@ -2,14 +2,26 @@ import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { signIn } from "@/app/(auth)/auth";
 import { isDevelopmentEnvironment } from "@/lib/constants";
+import { applicationOrigin } from "@/lib/server/conversations/authorization";
 
 export async function GET(request: Request) {
+  const origin = applicationOrigin(request.url);
+  if (!origin) {
+    return new Response("Service unavailable", { status: 503 });
+  }
   const { searchParams } = new URL(request.url);
   const rawRedirect = searchParams.get("redirectUrl") || "/";
-  const redirectUrl =
-    rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")
-      ? rawRedirect
-      : "/";
+  let redirectUrl = "/";
+  if (rawRedirect.startsWith("/") && !rawRedirect.startsWith("//")) {
+    try {
+      const target = new URL(rawRedirect, origin);
+      if (target.origin === origin) {
+        redirectUrl = `${target.pathname}${target.search}${target.hash}`;
+      }
+    } catch {
+      // Invalid destinations are safely ignored.
+    }
+  }
 
   const token = await getToken({
     req: request,
@@ -19,7 +31,7 @@ export async function GET(request: Request) {
 
   if (token) {
     const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    return NextResponse.redirect(new URL(`${base}/`, request.url));
+    return NextResponse.redirect(new URL(`${base}/`, origin));
   }
 
   try {
@@ -29,11 +41,14 @@ export async function GET(request: Request) {
       redirect: false,
       redirectTo: redirectUrl,
     });
-    return NextResponse.redirect(new URL(destination, request.url));
+    const result = new URL(destination, origin);
+    return NextResponse.redirect(
+      result.origin === origin ? result : new URL("/", origin)
+    );
   } catch {
     const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
     return NextResponse.redirect(
-      new URL(`${base}/login?guest=unavailable`, request.url)
+      new URL(`${base}/login?guest=unavailable`, origin)
     );
   }
 }

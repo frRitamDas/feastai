@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import { applicationOrigin } from "./lib/server/conversations/authorization";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -37,16 +38,23 @@ export async function proxy(request: NextRequest) {
   if (isAuthPage) {
     const isGuest = guestRegex.test(token?.email ?? "");
     if (token && !isGuest) {
-      return NextResponse.redirect(new URL(`${base}/`, request.url));
+      const origin = applicationOrigin(request.url);
+      return origin
+        ? NextResponse.redirect(new URL(`${base}/`, origin))
+        : new Response("Service unavailable", { status: 503 });
     }
     return NextResponse.next();
   }
 
   if (!token) {
-    const redirectUrl = encodeURIComponent(new URL(request.url).pathname);
+    const origin = applicationOrigin(request.url);
+    if (!origin) {
+      return new Response("Service unavailable", { status: 503 });
+    }
+    const redirectUrl = encodeURIComponent(pathname);
 
     return NextResponse.redirect(
-      new URL(`${base}/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
+      new URL(`${base}/api/auth/guest?redirectUrl=${redirectUrl}`, origin)
     );
   }
 

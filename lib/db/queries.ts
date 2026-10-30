@@ -28,6 +28,7 @@ import {
 import { RESERVE_QUOTA_SQL } from "../server/security/quota";
 import { RATE_LIMIT_SQL } from "../server/security/rate-limit";
 import { generateUUID } from "../utils";
+import { resolveDatabaseUrl } from "./connection-url";
 import {
   type Chat,
   chat,
@@ -43,7 +44,12 @@ import {
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
-const client = postgres(process.env.POSTGRES_URL ?? "");
+const client = postgres(
+  resolveDatabaseUrl(
+    process.env.POSTGRES_URL ?? "",
+    process.env.GRACE_SUPABASE_POOLER_HOST
+  )
+);
 const db = drizzle(client);
 
 export async function getUserSessionState(id: string) {

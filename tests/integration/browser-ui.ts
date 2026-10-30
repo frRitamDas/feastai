@@ -10,6 +10,31 @@ export async function exerciseBrowser(base: string) {
     executablePath,
   });
   try {
+    // Failure to provision a guest must never block access to account pages.
+    const noIpContext = await browser.newContext({ ignoreHTTPSErrors: true });
+    const noIpPage = await noIpContext.newPage();
+    const signup = await noIpPage.goto(`${base}/register`);
+    assert.equal(signup?.status(), 200);
+    await noIpPage.getByRole("heading", { name: "Create account" }).waitFor();
+    await noIpPage.goto(`${base}/`);
+    await noIpPage.waitForURL(`${base}/login?guest=unavailable`);
+    await noIpPage
+      .getByRole("alert")
+      .getByText(/Guest access/)
+      .waitFor();
+    await noIpContext.close();
+
+    // With a trusted client IP and working database, real guest provisioning
+    // should issue a session and open the chat rather than the fallback page.
+    const guestContext = await browser.newContext({
+      extraHTTPHeaders: { "x-real-ip": "203.0.113.11" },
+      ignoreHTTPSErrors: true,
+    });
+    const guestPage = await guestContext.newPage();
+    await guestPage.goto(`${base}/`);
+    await guestPage.getByTestId("multimodal-input").waitFor();
+    await guestContext.close();
+
     const context = await browser.newContext({
       extraHTTPHeaders: { "x-real-ip": "203.0.113.10" },
       ignoreHTTPSErrors: true,

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { ipAddress } from "@vercel/functions";
 import postgres from "postgres";
+import { resolveDatabaseUrl } from "@/lib/db/connection-url";
 
 async function probe(url: string, forceTls = false) {
   let connection: ReturnType<typeof postgres> | undefined;
@@ -61,6 +62,14 @@ export async function GET(request: Request) {
             decodeURIComponent(parsed.username).includes(expectedRef)),
         ...(await probe(url)),
       };
+      if (process.env.GRACE_SUPABASE_POOLER_HOST) {
+        database = {
+          ...database,
+          effectiveConnection: await probe(
+            resolveDatabaseUrl(url, process.env.GRACE_SUPABASE_POOLER_HOST)
+          ),
+        };
+      }
       // Only derive fixed Supabase endpoints for the same project and region;
       // the password is kept server-side and never returned in the result.
       if (
