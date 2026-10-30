@@ -16,6 +16,10 @@ Owners can enable or disable non-administrator accounts and set their per-accoun
 
 ## Attachments and announcements
 
-Administrators can create, publish and unpublish plain-text announcements. JPEG/PNG images and UTF-8 text files are stored privately in PostgreSQL, limited to 2 MiB per image or 32 KiB per text file and 20 MiB per user; only the owning account can retrieve them. Inference accepts up to 10 attachments and 4 MiB total attachment data per conversation. Images require a gateway model reporting vision support; text files are included as text. Existing external image links are not fetched by the server. Uploaded files persist independently of chat deletion and currently require an operator-managed retention process.
+Administrators can create, publish and unpublish plain-text announcements. JPEG/PNG images and UTF-8 text files are stored privately in PostgreSQL, limited to 2 MiB per image or 32 KiB per text file and 20 MiB per user; only the owning account can retrieve them. Inference accepts up to 10 attachments and 4 MiB total attachment data per conversation. Images require a gateway model reporting vision support; text files are included as text. Existing external image links are not fetched by the server. Users can clear unused uploads; attachments referenced by conversations are protected from that action. Previously stored files are conservatively treated as referenced. Referenced files persist independently of chat deletion and require an operator-managed retention process.
 
 Registration requires server-verified Cloudflare Turnstile in production, with site key `NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY`, secret `GRACE_TURNSTILE_SECRET`, and `AUTH_URL` for hostname binding. Missing configuration fails closed; the secret must never be exposed to the browser.
+
+## Emergency controls
+
+Owners can pause new registrations and chat generation independently in System settings. Changes take effect on the next request and do not delete accounts or conversations. Missing system settings fail closed. CAPTCHA requirements and administrator MFA cannot be disabled through these controls.

@@ -32,7 +32,12 @@ export default function Page() {
     ) {
       challengeRef.current?.reset();
     }
-    if (state.status === "user_exists") {
+    if (state.status === "disabled") {
+      toast({
+        description: "Registration is temporarily unavailable.",
+        type: "error",
+      });
+    } else if (state.status === "user_exists") {
       toast({ description: "Account already exists!", type: "error" });
     } else if (state.status === "failed") {
       toast({ description: "Failed to create account!", type: "error" });

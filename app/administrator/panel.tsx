@@ -39,6 +39,11 @@ type Overview = {
   }[];
   role: "owner" | "operator" | "viewer";
   catalogConfigured: boolean;
+  settings: {
+    registrationEnabled: boolean;
+    chatEnabled: boolean;
+    updatedAt: string;
+  };
   counts: { users: number; chats: number; messages: number };
   usage: {
     completedCalls: number;
@@ -91,6 +96,7 @@ const sections = [
   "Models & routing",
   "Users",
   "Announcements",
+  "System settings",
   "Audit log",
 ] as const;
 
@@ -760,6 +766,60 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                   ))}
                 </div>
               </div>
+            )}
+            {section === "System settings" && (
+              <section className="space-y-5 rounded-2xl border p-5">
+                <div>
+                  <h2 className="font-semibold">Emergency controls</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Changes take effect on the next request. Existing sessions
+                    and conversations are preserved. Only owners can change
+                    these settings.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <strong>Chat generation</strong>
+                    <p className="text-sm text-muted-foreground">
+                      {data.settings.chatEnabled ? "Enabled" : "Paused"}
+                    </p>
+                  </div>
+                  <Button
+                    disabled={busy || data.role !== "owner"}
+                    onClick={() =>
+                      action("system-settings", {
+                        chatEnabled: !data.settings.chatEnabled,
+                        registrationEnabled: data.settings.registrationEnabled,
+                      })
+                    }
+                    variant="outline"
+                  >
+                    {data.settings.chatEnabled ? "Pause chat" : "Enable chat"}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <strong>New registrations</strong>
+                    <p className="text-sm text-muted-foreground">
+                      {data.settings.registrationEnabled ? "Enabled" : "Paused"}
+                    </p>
+                  </div>
+                  <Button
+                    disabled={busy || data.role !== "owner"}
+                    onClick={() =>
+                      action("system-settings", {
+                        chatEnabled: data.settings.chatEnabled,
+                        registrationEnabled: !data.settings.registrationEnabled,
+                      })
+                    }
+                    variant="outline"
+                  >
+                    {data.settings.registrationEnabled
+                      ? "Pause registrations"
+                      : "Enable registrations"}
+                  </Button>
+                </div>
+              </section>
             )}
             {section === "Announcements" && (
               <div className="space-y-5">

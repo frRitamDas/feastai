@@ -37,6 +37,7 @@ const bodySchema = z
     announcementId: uuid.optional(),
     baseUrl: z.url().max(512).optional(),
     body: z.string().trim().min(1).max(2000).optional(),
+    chatEnabled: z.boolean().optional(),
     code: z
       .string()
       .regex(/^\d{6}$/)
@@ -63,6 +64,7 @@ const bodySchema = z
         "mistral",
       ])
       .optional(),
+    registrationEnabled: z.boolean().optional(),
     role: z.enum(["owner", "operator", "viewer"]).optional(),
     routeId: uuid.optional(),
     title: z.string().trim().min(1).max(120).optional(),
@@ -82,6 +84,12 @@ export async function GET(_request: Request, context: Context) {
       return reply({ error: "Not found" }, 404);
     }
     const db = getAdminDatabase();
+    const [settings] = await db.query(
+      'SELECT "registrationEnabled", "chatEnabled", "updatedAt" FROM "GraceSystemSetting" WHERE "id" = 1'
+    );
+    if (!settings) {
+      return reply({ error: "System settings unavailable" }, 503);
+    }
     const [counts] = await db.query(
       'SELECT (SELECT count(*)::int FROM "User" WHERE "isAnonymous" = false) AS users, (SELECT count(*)::int FROM "Chat") AS chats, (SELECT count(*)::int FROM "Message_v2") AS messages'
     );
@@ -120,6 +128,7 @@ export async function GET(_request: Request, context: Context) {
       models,
       role: admin.role,
       routes,
+      settings,
       usage,
       usageByModel,
       users,
@@ -313,6 +322,26 @@ export async function POST(request: Request, context: Context) {
         );
       }
       await audit(admin.userId, action, data.userId, "success");
+      return reply({ ok: true });
+    }
+    if (action === "system-settings") {
+      if (admin.role !== "owner") {
+        return reply({ error: "Not authorized" }, 403);
+      }
+      if (
+        data.chatEnabled === undefined ||
+        data.registrationEnabled === undefined
+      ) {
+        return reply({ error: "Invalid request" }, 400);
+      }
+      const rows = await getAdminDatabase().query(
+        'UPDATE "GraceSystemSetting" SET "chatEnabled" = $1, "registrationEnabled" = $2, "updatedAt" = now() WHERE "id" = 1 RETURNING "id"',
+        [data.chatEnabled, data.registrationEnabled]
+      );
+      if (!rows.length) {
+        return reply({ error: "System settings unavailable" }, 503);
+      }
+      await audit(admin.userId, action, null, "success");
       return reply({ ok: true });
     }
     if (action === "create-announcement") {

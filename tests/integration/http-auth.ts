@@ -32,6 +32,8 @@ async function main() {
     "0015_grace_session_version",
     "0016_grace_private_attachments",
     "0017_grace_usage_attribution",
+    "0018_grace_system_settings",
+    "0019_grace_attachment_retention",
   ]) {
     await db.exec(await readFile(`lib/db/migrations/${migration}.sql`, "utf8"));
   }
@@ -251,6 +253,33 @@ async function main() {
         assert.equal((await response.json()).verified, true);
       }
     }
+    const pause = await post(
+      "system-settings",
+      { chatEnabled: false, registrationEnabled: false },
+      adminCookies
+    );
+    assert.equal(pause.status, 200);
+    const pausedChat = await fetch(`${base}/api/chat`, {
+      body: JSON.stringify({
+        id: randomUUID(),
+        message: {
+          id: randomUUID(),
+          parts: [{ text: "Hello", type: "text" }],
+          role: "user",
+        },
+        selectedChatModel: `grace/${modelId}`,
+        selectedVisibilityType: "private",
+      }),
+      headers: { ...reqHeaders, "Content-Type": "application/json" },
+      method: "POST",
+    });
+    assert.equal(pausedChat.status, 503);
+    const resume = await post(
+      "system-settings",
+      { chatEnabled: true, registrationEnabled: true },
+      adminCookies
+    );
+    assert.equal(resume.status, 200);
     const textForm = new FormData();
     textForm.append(
       "file",
@@ -295,6 +324,15 @@ async function main() {
     assert.ok(
       streamed.includes("Hello from the mock model"),
       `${streamed} ${logs}`
+    );
+    const protectedFile = await fetch(textFile.url, {
+      headers: reqHeaders,
+      method: "DELETE",
+    });
+    assert.equal(protectedFile.status, 404);
+    assert.equal(
+      (await fetch(textFile.url, { headers: reqHeaders })).status,
+      200
     );
     const messages = await db.query(
       'SELECT "role" FROM "Message_v2" WHERE "chatId" = $1 ORDER BY "createdAt"',
@@ -385,6 +423,17 @@ async function main() {
       401
     );
 
+    const clear = await fetch(`${base}/api/files`, {
+      headers: reqHeaders,
+      method: "DELETE",
+    });
+    assert.equal(clear.status, 200);
+    assert.equal((await clear.json()).removed, 1);
+    assert.equal((await fetch(file.url, { headers: reqHeaders })).status, 404);
+    assert.equal(
+      (await fetch(textFile.url, { headers: reqHeaders })).status,
+      200
+    );
     const change = await fetch(`${base}/api/profile`, {
       body: JSON.stringify({
         currentPassword: "correct-password",

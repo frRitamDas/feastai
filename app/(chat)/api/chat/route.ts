@@ -27,11 +27,13 @@ import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
+  claimPrivateAttachments,
   createStreamId,
   deleteChatById,
   getChatById,
   getMessagesByChatId,
   getPrivateAttachment,
+  getSystemSettings,
   recordUsage,
   reserveChatQuota,
   saveChat,
@@ -104,6 +106,9 @@ export async function POST(request: Request) {
     }
 
     await enforceIpRateLimit(ipAddress(request), "chat");
+    if (!(await getSystemSettings()).chatEnabled) {
+      return new ChatbotError("offline:chat").toResponse();
+    }
     let sharedModels: Awaited<
       ReturnType<
         NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
@@ -253,6 +258,17 @@ export async function POST(request: Request) {
       return new ChatbotError(
         "bad_request:api",
         "Attachments are unavailable or exceed the 4 MB conversation limit."
+      ).toResponse();
+    }
+    if (
+      !(await claimPrivateAttachments(
+        session.user.id,
+        loaded.flatMap((file) => (file ? [file.id] : []))
+      ))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "An attachment is no longer available."
       ).toResponse();
     }
     let fileIndex = 0;

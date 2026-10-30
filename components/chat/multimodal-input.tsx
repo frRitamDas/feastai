@@ -628,6 +628,8 @@ function PureAttachmentPreviewItem({
   setAttachments: Dispatch<SetStateAction<Attachment[]>>;
 }) {
   const handleRemove = useCallback(() => {
+    // The server only removes unused files; already-referenced files remain intact.
+    fetch(attachment.url, { method: "DELETE" }).catch(() => undefined);
     setAttachments((currentAttachments) =>
       currentAttachments.filter((a) => a.url !== attachment.url)
     );

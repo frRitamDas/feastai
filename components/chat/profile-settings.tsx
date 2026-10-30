@@ -139,6 +139,37 @@ export function ProfileSettings({
             Save settings
           </Button>
         </form>
+        <div className="border-t pt-3">
+          <p className="text-sm text-muted-foreground">
+            Unused uploads can be cleared without removing attachments in
+            conversations.
+          </p>
+          <Button
+            className="mt-2"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const response = await fetch("/api/files", {
+                  method: "DELETE",
+                });
+                if (!response.ok) {
+                  throw new Error("Unable to clear unused uploads.");
+                }
+                const result = await response.json();
+                setMessage(`Cleared ${result.removed} unused upload(s).`);
+              } catch {
+                setMessage("Unable to clear unused uploads.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+            type="button"
+            variant="outline"
+          >
+            Clear unused uploads
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

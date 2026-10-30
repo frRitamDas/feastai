@@ -97,6 +97,18 @@ export async function reserveChatQuota(id: string): Promise<boolean> {
   return rows.length === 1;
 }
 
+export async function getSystemSettings() {
+  const [settings] = await client.unsafe<
+    { registrationEnabled: boolean; chatEnabled: boolean }[]
+  >(
+    'SELECT "registrationEnabled", "chatEnabled" FROM "GraceSystemSetting" WHERE "id" = 1'
+  );
+  if (!settings) {
+    throw new Error("System settings unavailable");
+  }
+  return settings;
+}
+
 export async function getPublishedAnnouncements() {
   return await client.unsafe<{ id: string; title: string; body: string }[]>(
     'SELECT "id", "title", "body" FROM "GraceAnnouncement" WHERE "enabled" = true ORDER BY "createdAt" DESC LIMIT 10'
@@ -132,6 +144,37 @@ export async function getPrivateAttachment(userId: string, id: string) {
     [id, userId]
   );
   return rows[0] ?? null;
+}
+
+/** Claim references before saving a message; deletion only accepts unclaimed files. */
+export async function claimPrivateAttachments(userId: string, ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) {
+    return true;
+  }
+  const rows = await client.unsafe(
+    `UPDATE "GraceAttachment" SET "usedAt" = COALESCE("usedAt", now()) WHERE "userId" = $1 AND "id" IN (SELECT jsonb_array_elements_text($2::text::jsonb)::uuid) RETURNING "id"`,
+    [userId, JSON.stringify(unique)]
+  );
+  return rows.length === unique.length;
+}
+export async function deleteUnusedAttachment(userId: string, id: string) {
+  return (
+    (
+      await client.unsafe(
+        'DELETE FROM "GraceAttachment" WHERE "userId" = $1 AND "id" = $2 AND "usedAt" IS NULL RETURNING "id"',
+        [userId, id]
+      )
+    ).length > 0
+  );
+}
+export async function clearUnusedAttachments(userId: string) {
+  return (
+    await client.unsafe(
+      'DELETE FROM "GraceAttachment" WHERE "userId" = $1 AND "usedAt" IS NULL RETURNING "id"',
+      [userId]
+    )
+  ).length;
 }
 
 export async function getUser(email: string): Promise<User[]> {

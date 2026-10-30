@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
-import { getPrivateAttachment } from "@/lib/db/queries";
+import { deleteUnusedAttachment, getPrivateAttachment } from "@/lib/db/queries";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
 
 export async function GET(
   _request: Request,
@@ -23,5 +24,26 @@ export async function GET(
       "Content-Type": file.mediaType,
       "X-Content-Type-Options": "nosniff",
     },
+  });
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return new Response(null, { status: 403 });
+  }
+  const session = await auth();
+  const { id } = await params;
+  if (!session?.user?.id || !z.uuid().safeParse(id).success) {
+    return new Response(null, { status: 404 });
+  }
+  if (!(await deleteUnusedAttachment(session.user.id, id))) {
+    return new Response(null, { status: 404 });
+  }
+  return new Response(null, {
+    headers: { "Cache-Control": "no-store" },
+    status: 204,
   });
 }
