@@ -1,9 +1,11 @@
+import { auth } from "@/app/(auth)/auth";
 import {
   chatModels,
   getAllGatewayModels,
   getCapabilities,
   isDemo,
 } from "@/lib/ai/models";
+import { getEffectiveEntitlement } from "@/lib/db/queries";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
 
 export async function GET() {
@@ -16,9 +18,23 @@ export async function GET() {
   try {
     const catalog = getRuntimeCatalog();
     if (catalog) {
+      const session = await auth();
+      if (!session?.user?.id) {
+        return Response.json(
+          { error: "Sign in required" },
+          { headers: { "Cache-Control": "no-store" }, status: 401 }
+        );
+      }
+      const entitlement = await getEffectiveEntitlement(session.user.id);
+      if (!entitlement) {
+        return Response.json(
+          { error: "Account unavailable" },
+          { headers: { "Cache-Control": "no-store" }, status: 403 }
+        );
+      }
       const [available, routes] = await Promise.all([
-        catalog.listPublicModels(),
-        catalog.listPublicRoutes(),
+        catalog.listPublicModels(entitlement.plan),
+        catalog.listPublicRoutes(entitlement.plan),
       ]);
       const shared = available.map((m) => ({
         description: "Shared provider model",
@@ -33,11 +49,18 @@ export async function GET() {
         provider: "Grace AI",
       }));
       const capabilities = { ...curatedCapabilities };
-      for (const model of [...shared, ...automatic]) {
-        capabilities[model.id] = {
+      for (const model of available) {
+        capabilities[`grace/${model.id}`] = {
           reasoning: false,
           tools: false,
-          vision: false,
+          vision: model.supportsVision === true,
+        };
+      }
+      for (const route of routes) {
+        capabilities[`auto/${route.id}`] = {
+          reasoning: false,
+          tools: false,
+          vision: route.supportsVision === true,
         };
       }
       return Response.json(

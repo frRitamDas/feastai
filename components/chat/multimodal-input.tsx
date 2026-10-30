@@ -241,10 +241,7 @@ function PureMultimodalInput({
           type: "file" as const,
           url: attachment.url,
         })),
-        {
-          text: input,
-          type: "text",
-        },
+        ...(input.trim() ? [{ text: input, type: "text" as const }] : []),
       ],
       role: "user",
     });
@@ -299,9 +296,25 @@ function PureMultimodalInput({
 
   const handleFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.target.files || []);
-
-      setUploadQueue(files.map((file) => file.name));
+      const selected = Array.from(event.target.files || []);
+      if (uploadQueue.length) {
+        toast.error("Please wait for uploads to finish.");
+        event.target.value = "";
+        return;
+      }
+      const available = Math.max(0, 10 - attachments.length);
+      const files = selected.slice(0, available);
+      if (files.length < selected.length) {
+        toast.error("A conversation can include up to 10 attachments.");
+      }
+      event.target.value = "";
+      if (!files.length) {
+        return;
+      }
+      setUploadQueue((current) => [
+        ...current,
+        ...files.map((file) => file.name),
+      ]);
 
       try {
         const uploadPromises = files.map((file) => uploadFile(file));
@@ -320,14 +333,11 @@ function PureMultimodalInput({
         setUploadQueue([]);
       }
     },
-    [setAttachments, uploadFile]
+    [attachments.length, setAttachments, uploadFile, uploadQueue.length]
   );
 
   const handlePaste = useCallback(
     async (event: ClipboardEvent) => {
-      if (process.env.NODE_ENV === "production") {
-        return;
-      }
       const items = event.clipboardData?.items;
       if (!items) {
         return;
@@ -342,14 +352,24 @@ function PureMultimodalInput({
       }
 
       event.preventDefault();
-
-      setUploadQueue((prev) => [...prev, "Pasted image"]);
+      if (uploadQueue.length) {
+        toast.error("Please wait for uploads to finish.");
+        return;
+      }
+      const files = imageItems
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null)
+        .slice(0, Math.max(0, 10 - attachments.length));
+      if (files.length < imageItems.length) {
+        toast.error("A conversation can include up to 10 attachments.");
+      }
+      if (!files.length) {
+        return;
+      }
+      setUploadQueue(files.map(() => "Pasted image"));
 
       try {
-        const uploadPromises = imageItems
-          .map((item) => item.getAsFile())
-          .filter((file): file is File => file !== null)
-          .map((file) => uploadFile(file));
+        const uploadPromises = files.map((file) => uploadFile(file));
 
         const uploadedAttachments = await Promise.all(uploadPromises);
         const successfullyUploadedAttachments = uploadedAttachments.filter(
@@ -369,7 +389,7 @@ function PureMultimodalInput({
         setUploadQueue([]);
       }
     },
-    [setAttachments, uploadFile]
+    [attachments.length, setAttachments, uploadFile, uploadQueue.length]
   );
 
   useEffect(() => {
@@ -549,13 +569,11 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
-            {process.env.NODE_ENV !== "production" && (
-              <AttachmentsButton
-                fileInputRef={fileInputRef}
-                selectedModelId={selectedModelId}
-                status={status}
-              />
-            )}
+            <AttachmentsButton
+              fileInputRef={fileInputRef}
+              selectedModelId={selectedModelId}
+              status={status}
+            />
             <ModelSelectorCompact
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
@@ -568,12 +586,15 @@ function PureMultimodalInput({
             <PromptInputSubmit
               className={cn(
                 "h-7 w-7 rounded-xl transition-all duration-200",
-                input.trim()
-                  ? "bg-foreground text-background hover:opacity-85 active:scale-95"
+                input.trim() || attachments.length > 0
+                  ? "bg-primary text-primary-foreground hover:opacity-85 active:scale-95"
                   : "bg-muted text-muted-foreground/25 cursor-not-allowed"
               )}
               data-testid="send-button"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={
+                (!input.trim() && attachments.length === 0) ||
+                uploadQueue.length > 0
+              }
               status={status}
               variant="secondary"
             >
@@ -671,6 +692,7 @@ function PureAttachmentsButton({
 
   return (
     <Button
+      aria-label="Attach a file"
       className={cn(
         "h-7 w-7 rounded-lg border border-border/40 p-1 transition-colors",
         "text-foreground hover:border-border hover:text-foreground"

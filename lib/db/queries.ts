@@ -13,6 +13,7 @@ import {
   inArray,
   lt,
   type SQL,
+  sql,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -20,6 +21,10 @@ import type { ArtifactKind } from "@/components/chat/artifact";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { ChatbotError } from "../errors";
 import { escapeSearchTerm } from "../server/conversations/search";
+import {
+  EFFECTIVE_ENTITLEMENT_SQL,
+  type EntitlementPlan,
+} from "../server/security/entitlements";
 import { RESERVE_QUOTA_SQL } from "../server/security/quota";
 import { RATE_LIMIT_SQL } from "../server/security/rate-limit";
 import { generateUUID } from "../utils";
@@ -90,6 +95,13 @@ export async function updateProfile(
       )
     ).length === 1
   );
+}
+
+export async function getEffectiveEntitlement(id: string) {
+  const [row] = await client.unsafe<
+    { plan: EntitlementPlan; planExpiresAt: Date | null }[]
+  >(EFFECTIVE_ENTITLEMENT_SQL, [id]);
+  return row ?? null;
 }
 
 export async function reserveChatQuota(id: string): Promise<boolean> {
@@ -179,7 +191,10 @@ export async function clearUnusedAttachments(userId: string) {
 
 export async function getUser(email: string): Promise<User[]> {
   try {
-    return await db.select().from(user).where(eq(user.email, email));
+    return await db
+      .select()
+      .from(user)
+      .where(sql`lower(${user.email}) = lower(${email})`);
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }

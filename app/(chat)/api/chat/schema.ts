@@ -14,11 +14,15 @@ const filePartSchema = z.object({
 
 const partSchema = z.union([textPartSchema, filePartSchema]);
 
-const userMessageSchema = z.object({
-  id: z.uuid(),
-  parts: z.array(partSchema).min(1).max(20),
-  role: z.enum(["user"]),
-});
+const userMessageSchema = z
+  .object({
+    id: z.uuid(),
+    parts: z.array(partSchema).min(1).max(20),
+    role: z.enum(["user"]),
+  })
+  .refine((value) =>
+    value.parts.some((part) => part.type === "file" || part.text.trim())
+  );
 
 const toolApprovalMessageSchema = z.object({
   id: z.string().min(1).max(128),

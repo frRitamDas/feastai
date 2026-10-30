@@ -108,84 +108,27 @@ export const ModelSelectorSeparator = (props: ModelSelectorSeparatorProps) => (
   <CommandSeparator {...props} />
 );
 
-export type ModelSelectorLogoProps = Omit<
-  ComponentProps<"img">,
-  "src" | "alt"
-> & {
-  provider:
-    | "moonshotai-cn"
-    | "lucidquery"
-    | "moonshotai"
-    | "zai-coding-plan"
-    | "alibaba"
-    | "xai"
-    | "vultr"
-    | "nvidia"
-    | "upstage"
-    | "groq"
-    | "github-copilot"
-    | "mistral"
-    | "vercel"
-    | "nebius"
-    | "deepseek"
-    | "alibaba-cn"
-    | "google-vertex-anthropic"
-    | "venice"
-    | "chutes"
-    | "cortecs"
-    | "github-models"
-    | "togetherai"
-    | "azure"
-    | "baseten"
-    | "huggingface"
-    | "opencode"
-    | "fastrouter"
-    | "google"
-    | "google-vertex"
-    | "cloudflare-workers-ai"
-    | "inception"
-    | "wandb"
-    | "openai"
-    | "zhipuai-coding-plan"
-    | "perplexity"
-    | "openrouter"
-    | "zenmux"
-    | "v0"
-    | "iflowcn"
-    | "synthetic"
-    | "deepinfra"
-    | "zhipuai"
-    | "submodel"
-    | "zai"
-    | "inference"
-    | "requesty"
-    | "morph"
-    | "lmstudio"
-    | "anthropic"
-    | "aihubmix"
-    | "fireworks-ai"
-    | "modelscope"
-    | "llama"
-    | "scaleway"
-    | "amazon-bedrock"
-    | "cerebras"
-    // oxlint-disable-next-line typescript-eslint(ban-types) -- intentional pattern for autocomplete-friendly string union
-    | (string & {});
+export type ModelSelectorLogoProps = Omit<ComponentProps<"span">, "children"> & {
+  provider: string;
 };
 
+/** A local provider monogram avoids broken logos and third-party image requests. */
 export const ModelSelectorLogo = ({
   provider,
   className,
   ...props
 }: ModelSelectorLogoProps) => (
-  <img
+  <span
     {...props}
-    alt={`${provider} logo`}
-    className={cn("size-4 dark:invert", className)}
-    height={16}
-    src={`https://models.dev/logos/${provider}.svg`}
-    width={16}
-  />
+    aria-label={`${provider} provider`}
+    className={cn(
+      "flex size-4 shrink-0 items-center justify-center rounded bg-primary/15 text-[9px] font-semibold uppercase text-primary",
+      className
+    )}
+    role="img"
+  >
+    {provider.slice(0, 1)}
+  </span>
 );
 
 export type ModelSelectorLogoGroupProps = ComponentProps<"div">;

@@ -1,39 +1,35 @@
 # Grace AI
 
-Think clearly. Create freely. Grace AI is an AI workspace by Ritam Das, developed under Huracan.
+Grace AI is a conversational AI workspace by Ritam Das, built on the Vercel AI SDK chatbot foundation. It uses Next.js, Auth.js, PostgreSQL/Drizzle, and a server-side encrypted provider catalog.
 
-## Current implementation and limitations
+## Features
 
-This repository currently contains a Next.js App Router chat application using Auth.js credentials, Drizzle/PostgreSQL, and the Vercel AI SDK's AI Gateway. It supports streaming and conversation history. JPEG, PNG and UTF-8 text uploads use authenticated, private database storage with per-user limits. Image input requires a gateway model reporting vision support; shared-catalog models remain text-only. Legacy external attachment URLs are not accepted for inference. The default Gateway model list is configured in source. An opt-in catalog can expose verified shared models for eight fixed providers and an allowlisted OpenAI-compatible provider; it requires the catalog migrations and external encryption key. Gateway access requires its own configuration and may incur costs.
+- Responsive chat with streamed responses, conversation history, Markdown and code, model selection, profile settings, and private JPEG, PNG, and text attachments. Shared models support images only when an administrator explicitly marks them as vision-capable; every candidate in an automatic route must support images for the route to accept them.
+- An unlinked `/administrator` console with role-scoped access, TOTP MFA, provider credentials and model discovery/verification, routing, connection health, usage, users, quotas, manual model entitlements, announcements, audit events, and emergency switches.
+- Provider adapters for Groq, OpenRouter, Gemini, Cerebras, SambaNova, Cloudflare Workers AI, Mistral, Hugging Face, and allowlisted OpenAI-compatible services. Credentials are encrypted at rest, never returned to the browser after submission, and used server-side. Providers must be configured and verified with real credentials before use.
+- Priority-based multi-key routing and explicitly configured cross-provider routes. Fallback is bounded and occurs only before a stream opens; request errors, tool use, caller cancellation, and partial streams are not retried. Connection opening latency and failures are operational signals, not proof of completed responses.
+- Server-enforced free/custom access tiers and optional expiry. These are manually granted entitlements, **not billing, payments, or automatic subscriptions**.
 
-**Not production-ready:** the administrator console supports role-checked provider and model operations with TOTP, but automatic multi-provider failover and CAPTCHA-backed administrator authentication are not implemented. Existing Auth.js authentication does not provide email verification or password reset. Production chat, guest creation, login, and registration use server-side Postgres fixed-window IP counters and fail closed when the counter, trusted client IP, or a sufficiently long AUTH_SECRET is unavailable. This is not a replacement for CAPTCHA, verified email, or comprehensive abuse protection; guest sessions and authentication still require further security review before public deployment. Do not treat the requested hostname as live until independently verified.
+## Security and limitations
 
-## Setup
+Production registration, first-owner setup, and administrator MFA require hostname- and action-bound Cloudflare Turnstile. Authentication and chat requests also use server-side PostgreSQL rate counters that fail closed if their trusted IP or database is unavailable. The database connection must use a trusted server-only role; application tables use deny-by-default RLS for unprivileged Supabase roles. Never expose database credentials, encryption keys, provider credentials, or Turnstile secrets to client code.
 
-Use Node.js 22+ and pnpm 10.32.1. Copy `.env.example` to `.env.local` and supply the required values privately. Install with `corepack pnpm install --frozen-lockfile`. Run `corepack pnpm db:migrate` only against a verified database after reviewing the migration and backup plan; build no longer runs migrations automatically. Start with `corepack pnpm dev`. Without PostgreSQL, Auth.js cannot create users or persist chats. Vercel Blob is needed for uploads; Redis is needed for distributed IP throttling and resumable streams. AI Gateway requires credentials outside Vercel or an appropriate Vercel OIDC setup.
+Auth.js credentials authentication does **not** include email verification or password reset. Guest access, deployment configuration, abuse defenses, key recovery, backups, and access controls require an independent security and operational review before commercial use. Usage records are best-effort for completed calls; interrupted calls, provider costs, and externally incurred charges are not comprehensive. Uploaded files persist independently of deleted chats and require an operator-managed retention policy.
 
-## Validation
+## Local setup
 
-Run `corepack pnpm check`, `corepack pnpm exec tsc --noEmit`, `corepack pnpm test:unit`, `corepack pnpm test`, and `corepack pnpm build`. Browser tests need the credentials described in `playwright.config.ts` and a working database. A successful build alone does not prove production readiness.
+Use Node.js 22+ and pnpm 10.32.1. Copy `.env.example` to `.env.local`, provide secrets privately, and run:
 
-## Deployment and recovery
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm db:migrate   # only after reviewing the target database and migration history
+corepack pnpm dev
+```
 
-See [operations](docs/operations/release-and-recovery.md). Never commit secrets. Configure deployment secrets through the hosting provider. Do not promote a release without testing authentication, authorization, persistence, model access and rollback on an isolated environment. The existing database schema must be reviewed for RLS before exposing it through Supabase APIs.
+A PostgreSQL database is required for users, rate limits, and persistence. Files are stored privately in PostgreSQL; Vercel Blob and Redis are not required for attachments or rate limiting. AI Gateway models are separately available when Gateway credentials or Vercel OIDC are configured; catalog providers use their own credentials. See [administrator operations](docs/operations/administration.md) for first-owner setup and provider enrollment.
 
-This project builds on the Vercel AI SDK chatbot foundation; retain the repository's license and upstream attribution in legal notices.
+## Validation and deployment
 
-## Provider foundations (not yet wired into chat)
+Run `corepack pnpm check`, `corepack pnpm exec tsc --noEmit`, `corepack pnpm test:unit`, `corepack pnpm test:integration`, and `corepack pnpm build`. After building, `GRACE_BROWSER_EXECUTABLE=/path/to/chromium corepack pnpm test:browser:smoke` runs an isolated HTTPS browser smoke test (requires OpenSSL). The HTTP and browser suites use isolated test-only mocks and do not validate real provider credentials, Vercel BotID, Turnstile, or a production deployment. The larger Playwright suite requires its configured database and credentials.
 
-Server-only modules include AES-256-GCM credential envelope helpers and bounded model-list discovery for Groq, OpenRouter, Cerebras, SambaNova, Mistral, Gemini, Hugging Face and Cloudflare Workers AI. Discovery results do not prove a key can run a model, and OpenRouter may return a public catalog without validating the key. A server-side catalog store and an operator CLI can persist encrypted credentials and discovery results after the migrations are applied. The administrator console and trusted CLI use these modules; the console requires an authorized account, TOTP, and an externally managed encryption key. The vault requires a separately managed, base64-encoded 32-byte encryption key and a tested key rotation procedure; it must never share the authentication secret. Generic OpenAI-compatible endpoints require an explicit server-side hostname allowlist and public DNS addresses; redirects are rejected. Gemini uses Google’s fixed model-list and OpenAI-compatible inference endpoints; real credentials have not been validated here.
-
-## Catalog migration and routing foundations
-
-Migrations `0001` and `0002` are additive: they create a disabled-by-default provider/model catalog and enable deny-by-default RLS for Auth.js-owned tables. They have been tested locally with PGlite, not applied to Supabase. Before production use, validate the actual schema, database connection role and tested backups: the app's server database role must be the table owner or an appropriately controlled BYPASSRLS role. Supabase anonymous and authenticated client roles have no policies. Existing chat operations must be verified with the exact production role after migration. Do not apply if this assumption cannot be verified.
-
-`lib/server/routing/policy.ts` contains tested candidate filtering and fallback-safety decisions. Shared text-only models use priority-ordered keys and can retry transient HTTP failures before opening a stream. Administrators can group explicitly interchangeable models into cross-provider automatic routes. With `GRACE_CATALOG_ENABLED=1`, the chat API can dispatch to a verified, enabled shared text-only model through fixed provider endpoints. Existing AI Gateway models remain available. The administrator console connects catalog operations to the existing verified-model chat path.
-
-## Operator catalog
-
-On a trusted host with `POSTGRES_URL` and a separately generated `GRACE_ENCRYPTION_KEY` (32 random bytes, base64 encoded), run `corepack pnpm catalog list`. Set `GRACE_PROVIDER_CREDENTIAL` privately in the operator environment only for `corepack pnpm catalog add groq "label"`; never put credentials in command arguments or shell history. Run `catalog discover <key-id>`, then `catalog models` to inspect IDs. Run `catalog verify <key-id> <model-id>` to perform a real small inference request (this may consume tokens or incur provider charges). An operator can use `enable-key <key-id>`, `enable-model <model-id>`, and `permit <key-id> <model-id>`; use `disable-key`, `disable-model`, `revoke`, or `delete` to withdraw access. Listing does not prove inference access. Keys and models default disabled, and removed discovery entries lose permission. No output contains saved credentials. These commands are privileged database operations; an authenticated administrator console is also available at /administrator. When the feature flag is enabled, only verified, enabled, available and explicitly permitted models appear in chat. Shared catalog models currently support text-only requests. Completed calls record provider-reported token counts when available; missing values remain unknown. Interrupted calls and costs are not comprehensively accounted for.
-
-Production registration requires a Cloudflare Turnstile site key and server secret; challenge responses are verified server-side and bound to the configured authentication hostname and registration action. Existing sessions are invalidated once when session-version migration 0015 is deployed, and on password changes.
+Builds do not apply migrations automatically. Before deployment, verify backups, both relevant migration histories, database privileges, required secrets, real provider inference, and rollback; see [release and recovery](docs/operations/release-and-recovery.md). A successful build alone is not a production readiness check.

@@ -2,12 +2,19 @@ import { ipAddress } from "@vercel/functions";
 import { auth } from "@/app/(auth)/auth";
 import { savePrivateAttachment } from "@/lib/db/queries";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
-import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import {
+  applicationOrigin,
+  isSameOrigin,
+} from "@/lib/server/conversations/authorization";
 import { isSafeImage, isSafeText } from "@/lib/server/security/attachments";
 import { readLimitedBytes } from "@/lib/server/security/read-limited-json";
 
 export async function POST(request: Request) {
-  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+  const publicOrigin = applicationOrigin(request.url);
+  if (
+    !publicOrigin ||
+    !isSameOrigin(request.url, request.headers.get("origin"))
+  ) {
     return Response.json({ error: "Invalid origin" }, { status: 403 });
   }
   const session = await auth();
@@ -55,7 +62,7 @@ export async function POST(request: Request) {
       {
         contentType: file.type,
         pathname: safeName,
-        url: new URL(`/api/files/${id}`, request.url).toString(),
+        url: new URL(`/api/files/${id}`, publicOrigin).toString(),
       },
       { headers: { "Cache-Control": "no-store" } }
     );

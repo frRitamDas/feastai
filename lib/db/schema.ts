@@ -36,6 +36,7 @@ export const graceUserPolicy = pgTable("GraceUserPolicy", {
   enabled: boolean("enabled").notNull().default(true),
   hourlyQuota: integer("hourlyQuota").notNull().default(10),
   plan: varchar("plan", { length: 32 }).notNull().default("free"),
+  planExpiresAt: timestamp("planExpiresAt", { withTimezone: true }),
   updatedAt: timestamp("updatedAt", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -239,6 +240,10 @@ export const graceModel = pgTable(
       .defaultNow(),
     name: varchar("name", { length: 300 }).notNull(),
     provider: varchar("provider", { length: 32 }).notNull(),
+    requiredPlan: varchar("requiredPlan", { length: 32 })
+      .notNull()
+      .default("free"),
+    supportsVision: boolean("supportsVision").notNull().default(false),
     upstreamId: varchar("upstreamId", { length: 300 }).notNull(),
   },
   (table) => ({
@@ -251,6 +256,9 @@ export const graceKeyModel = pgTable(
   "GraceKeyModel",
   {
     available: boolean("available").notNull().default(false),
+    connectionFailures: integer("connectionFailures").notNull().default(0),
+    connectionsOpened: integer("connectionsOpened").notNull().default(0),
+    cooldownUntil: timestamp("cooldownUntil", { withTimezone: true }),
     keyId: uuid("keyId").notNull(),
     lastCheckAt: timestamp("lastCheckAt", { withTimezone: true }),
     lastCheckStatus: varchar("lastCheckStatus", { length: 32 }),
@@ -258,6 +266,9 @@ export const graceKeyModel = pgTable(
       .notNull()
       .defaultNow(),
     lastLatencyMs: integer("lastLatencyMs"),
+    lastRuntimeAt: timestamp("lastRuntimeAt", { withTimezone: true }),
+    lastRuntimeLatencyMs: integer("lastRuntimeLatencyMs"),
+    lastRuntimeStatus: varchar("lastRuntimeStatus", { length: 32 }),
     modelId: uuid("modelId").notNull(),
     permitted: boolean("permitted").notNull().default(false),
     provider: varchar("provider", { length: 32 }).notNull(),
@@ -357,6 +368,10 @@ export const graceRouteGroup = pgTable("GraceRouteGroup", {
   enabled: boolean("enabled").notNull().default(false),
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 100 }).notNull(),
+  requiredPlan: varchar("requiredPlan", { length: 32 })
+    .notNull()
+    .default("free"),
+  strategy: varchar("strategy", { length: 16 }).notNull().default("manual"),
 });
 
 export const graceRouteMember = pgTable(

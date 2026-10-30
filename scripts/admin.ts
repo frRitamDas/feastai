@@ -47,7 +47,7 @@ async function main() {
         [userId, JSON.stringify(encrypted)]
       );
       await tx.query(
-        'INSERT INTO "GraceAdminAudit" ("actorId", "action", "target", "outcome") VALUES ($1, \'bootstrap\', $1::text, \'success\')',
+        'INSERT INTO "GraceAdminAudit" ("actorId", "action", "target", "outcome") VALUES ($1::uuid, \'bootstrap\', $1::uuid::text, \'success\')',
         [userId]
       );
     });

@@ -18,6 +18,7 @@
     "db:up": "drizzle-kit up",
     "test": "PLAYWRIGHT=True playwright test",
     "test:unit": "tsx --test tests/unit/*.test.ts",
+    "test:browser:smoke": "tsx tests/integration/browser-server.ts",
     "catalog": "tsx scripts/catalog.ts",
     "admin": "tsx scripts/admin.ts",
     "test:integration": "tsx tests/integration/http-auth.ts"

@@ -2,7 +2,11 @@ import { ipAddress } from "@vercel/functions";
 import { compare } from "bcrypt-ts";
 import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
-import { getProfile, updateProfile } from "@/lib/db/queries";
+import {
+  getEffectiveEntitlement,
+  getProfile,
+  updateProfile,
+} from "@/lib/db/queries";
 import { generateHashedPassword } from "@/lib/db/utils";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
@@ -39,8 +43,20 @@ export async function GET() {
       { headers, status: 404 }
     );
   }
+  const entitlement = await getEffectiveEntitlement(session.user.id);
+  if (!entitlement) {
+    return Response.json(
+      { error: "Account not found" },
+      { headers, status: 404 }
+    );
+  }
   return Response.json(
-    { email: profile.email, name: profile.name ?? "" },
+    {
+      email: profile.email,
+      name: profile.name ?? "",
+      plan: entitlement.plan,
+      planExpiresAt: entitlement.planExpiresAt,
+    },
     { headers }
   );
 }

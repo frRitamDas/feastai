@@ -7,7 +7,10 @@ import {
   isSafeImage,
   isSafeText,
 } from "../../lib/server/security/attachments";
-import { verifyRegistrationChallenge } from "../../lib/server/security/turnstile";
+import {
+  verifyRegistrationChallenge,
+  verifyTurnstileChallenge,
+} from "../../lib/server/security/turnstile";
 
 test("registration challenge requires successful host- and action-bound verification", async () => {
   const options = {
@@ -78,6 +81,38 @@ test("registration challenge requires successful host- and action-bound verifica
       ...options,
       request: () => Promise.reject(new Error("offline")),
     }),
+    false
+  );
+});
+
+test("administrator CAPTCHA is independently bound to the MFA action", async () => {
+  const options = {
+    action: "admin-mfa" as const,
+    expectedHost: "https://grace.example",
+    production: true,
+    secret: "secret",
+    token: "token",
+  };
+  const response = (action: string) => () =>
+    Promise.resolve(
+      Response.json({ action, hostname: "grace.example", success: true })
+    );
+  assert.equal(
+    await verifyTurnstileChallenge({
+      ...options,
+      request: response("admin-mfa"),
+    }),
+    true
+  );
+  assert.equal(
+    await verifyTurnstileChallenge({
+      ...options,
+      request: response("register"),
+    }),
+    false
+  );
+  assert.equal(
+    await verifyTurnstileChallenge({ ...options, secret: undefined }),
     false
   );
 });

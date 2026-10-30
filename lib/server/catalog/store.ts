@@ -13,7 +13,10 @@ import {
   type DiscoveryResult,
   discoverModels,
 } from "../providers/discovery";
+import type { ConnectionStatus } from "../providers/fallback";
 import { createProviderModel } from "../providers/inference";
+import { type RoutingStrategy, rankCandidates } from "../routing/policy";
+import type { EntitlementPlan } from "../security/entitlements";
 
 /** Database access must be injected by trusted server code, never by a client. */
 export interface CatalogDatabase {
@@ -43,10 +46,31 @@ function validId(id: string) {
   }
 }
 
+function validPlan(plan: EntitlementPlan) {
+  if (plan !== "free" && plan !== "custom") {
+    throw new Error("Invalid entitlement plan");
+  }
+}
+
 type StoredKey = {
   id: string;
   provider: DiscoveryProvider;
   encryptedCredential: EncryptedCredential;
+};
+
+type ResolvedCandidate = {
+  provider: DiscoveryProvider;
+  upstreamId: string;
+  credential: string;
+  keyId: string;
+  modelId: string;
+  supportsVision: boolean;
+};
+
+type CandidateRow = StoredKey & {
+  modelId: string;
+  upstreamId: string;
+  supportsVision: boolean;
 };
 
 /** These methods are internal primitives. Callers MUST enforce authorization,
@@ -189,6 +213,67 @@ export class CatalogStore {
     }
   }
 
+  async setModelVision(id: string, supportsVision: boolean) {
+    validId(id);
+    const rows = await this.db.query(
+      'UPDATE "GraceModel" SET "supportsVision" = $2 WHERE "id" = $1 RETURNING "id"',
+      [id, supportsVision]
+    );
+    if (!rows.length) {
+      throw new Error("Model not found");
+    }
+  }
+
+  async setModelPlan(id: string, plan: EntitlementPlan) {
+    validId(id);
+    validPlan(plan);
+    const rows = await this.db.query(
+      'UPDATE "GraceModel" SET "requiredPlan" = $2 WHERE "id" = $1 RETURNING "id"',
+      [id, plan]
+    );
+    if (!rows.length) {
+      throw new Error("Model not found");
+    }
+  }
+
+  /** Records only connection establishment, not completion or token usage. */
+  async recordConnection(
+    keyId: string,
+    modelId: string,
+    status: ConnectionStatus,
+    latencyMs: number
+  ) {
+    validId(keyId);
+    validId(modelId);
+    if (
+      ![
+        "opened",
+        "authentication_failed",
+        "rate_limited",
+        "timeout",
+        "unavailable",
+        "invalid_request",
+      ].includes(status) ||
+      !Number.isInteger(latencyMs) ||
+      latencyMs < 0 ||
+      latencyMs > 2_147_483_647
+    ) {
+      throw new Error("Invalid health observation");
+    }
+    await this.db.query(
+      `UPDATE "GraceKeyModel" SET
+        "connectionsOpened" = LEAST(2147483647::bigint, "connectionsOpened"::bigint + CASE WHEN $3 = 'opened' THEN 1 ELSE 0 END)::int,
+        "connectionFailures" = LEAST(2147483647::bigint, "connectionFailures"::bigint + CASE WHEN $3 NOT IN ('opened', 'invalid_request') THEN 1 ELSE 0 END)::int,
+        "lastRuntimeAt" = now(), "lastRuntimeStatus" = $3, "lastRuntimeLatencyMs" = $4,
+        "cooldownUntil" = CASE WHEN $3 = 'opened' THEN NULL
+          WHEN $3 = 'authentication_failed' THEN now() + interval '5 minutes'
+          WHEN $3 IN ('rate_limited', 'timeout', 'unavailable') THEN now() + interval '30 seconds'
+          ELSE "cooldownUntil" END
+       WHERE "keyId" = $1 AND "modelId" = $2`,
+      [keyId, modelId, status, latencyMs]
+    );
+  }
+
   async setPermission(keyId: string, modelId: string, permitted: boolean) {
     validId(keyId);
     validId(modelId);
@@ -261,7 +346,7 @@ export class CatalogStore {
 
   listCatalog() {
     return this.db.query(
-      'SELECT m."id", m."provider", m."upstreamId", m."name", m."enabled", p."keyId", p."permitted", p."available", p."verifiedAt", p."lastCheckAt", p."lastCheckStatus", p."lastLatencyMs" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" ORDER BY m."provider", m."name", p."keyId"'
+      'SELECT m."id", m."provider", m."upstreamId", m."name", m."enabled", m."supportsVision", m."requiredPlan", p."keyId", p."permitted", p."available", p."verifiedAt", p."lastCheckAt", p."lastCheckStatus", p."lastLatencyMs", p."connectionsOpened", p."connectionFailures", p."lastRuntimeAt", p."lastRuntimeStatus", p."lastRuntimeLatencyMs", p."cooldownUntil" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" ORDER BY m."provider", m."name", p."keyId"'
     );
   }
 
@@ -323,6 +408,7 @@ export class CatalogStore {
     // Re-check ciphertext and availability to avoid recording a changed key.
     const rows = await this.db.query(
       `UPDATE "GraceKeyModel" p SET "verifiedAt" = CASE WHEN $4::text = 'success' THEN now() ELSE NULL END,
+       "cooldownUntil" = CASE WHEN $4::text = 'success' THEN NULL ELSE p."cooldownUntil" END,
        "lastCheckAt" = now(), "lastCheckStatus" = $4, "lastLatencyMs" = $5
        FROM "GraceProviderKey" k WHERE p."keyId" = $1 AND p."modelId" = $2
        AND p."available" = true AND k."id" = p."keyId" AND k."encryptedCredential" = $3::text::jsonb
@@ -332,36 +418,43 @@ export class CatalogStore {
     return status === "success" && rows.length > 0;
   }
 
-  async resolveCandidates(modelId: string): Promise<
-    Array<{
-      provider: DiscoveryProvider;
-      upstreamId: string;
-      credential: string;
-    }>
-  > {
+  async resolveCandidates(
+    modelId: string,
+    plan: EntitlementPlan = "free"
+  ): Promise<ResolvedCandidate[]> {
     validId(modelId);
-    const rows = await this.db.query<StoredKey & { upstreamId: string }>(
-      `SELECT k."id", k."provider", k."encryptedCredential", m."upstreamId"
+    validPlan(plan);
+    const rows = await this.db.query<CandidateRow>(
+      `SELECT k."id", k."provider", k."encryptedCredential", m."id" AS "modelId", m."upstreamId", m."supportsVision"
        FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id"
        JOIN "GraceProviderKey" k ON k."id" = p."keyId"
        WHERE m."id" = $1 AND m."enabled" = true AND p."permitted" = true
        AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true
+       AND ($2 = 'custom' OR m."requiredPlan" = 'free')
+       AND (p."cooldownUntil" IS NULL OR p."cooldownUntil" <= now())
        ORDER BY k."priority", k."createdAt", k."id" LIMIT 3`,
-      [modelId]
+      [modelId, plan]
     );
-    return rows.map((row) => ({
+    return rows.map((row) => this.decryptCandidate(row));
+  }
+
+  private decryptCandidate(row: CandidateRow): ResolvedCandidate {
+    return {
       credential: decryptCredential(
         row.encryptedCredential,
         row.id,
         this.encryptionKey
       ),
+      keyId: row.id,
+      modelId: row.modelId,
       provider: row.provider,
+      supportsVision: row.supportsVision,
       upstreamId: row.upstreamId,
-    }));
+    };
   }
 
-  async resolve(modelId: string) {
-    return (await this.resolveCandidates(modelId))[0] ?? null;
+  async resolve(modelId: string, plan: EntitlementPlan = "free") {
+    return (await this.resolveCandidates(modelId, plan))[0] ?? null;
   }
 
   async createRoute(name: string) {
@@ -381,6 +474,32 @@ export class CatalogStore {
     const rows = await this.db.query(
       'UPDATE "GraceRouteGroup" SET "enabled" = $2 WHERE "id" = $1 RETURNING "id"',
       [routeId, enabled]
+    );
+    if (!rows.length) {
+      throw new Error("Route not found");
+    }
+  }
+
+  async setRouteStrategy(routeId: string, strategy: RoutingStrategy) {
+    validId(routeId);
+    if (!["manual", "fastest", "reliable", "balanced"].includes(strategy)) {
+      throw new Error("Invalid route strategy");
+    }
+    const rows = await this.db.query(
+      'UPDATE "GraceRouteGroup" SET "strategy" = $2 WHERE "id" = $1 RETURNING "id"',
+      [routeId, strategy]
+    );
+    if (!rows.length) {
+      throw new Error("Route not found");
+    }
+  }
+
+  async setRoutePlan(routeId: string, plan: EntitlementPlan) {
+    validId(routeId);
+    validPlan(plan);
+    const rows = await this.db.query(
+      'UPDATE "GraceRouteGroup" SET "requiredPlan" = $2 WHERE "id" = $1 RETURNING "id"',
+      [routeId, plan]
     );
     if (!rows.length) {
       throw new Error("Route not found");
@@ -413,50 +532,94 @@ export class CatalogStore {
 
   listRoutes() {
     return this.db.query(
-      'SELECT r."id", r."name", r."enabled", p."modelId", p."priority", m."name" AS "modelName", m."provider" FROM "GraceRouteGroup" r LEFT JOIN "GraceRouteMember" p ON p."routeId" = r."id" LEFT JOIN "GraceModel" m ON m."id" = p."modelId" ORDER BY r."createdAt", p."priority", p."modelId"'
+      'SELECT r."id", r."name", r."enabled", r."strategy", r."requiredPlan", p."modelId", p."priority", m."name" AS "modelName", m."provider" FROM "GraceRouteGroup" r LEFT JOIN "GraceRouteMember" p ON p."routeId" = r."id" LEFT JOIN "GraceModel" m ON m."id" = p."modelId" ORDER BY r."createdAt", p."priority", p."modelId"'
     );
   }
 
-  listPublicRoutes() {
+  listPublicRoutes(plan: EntitlementPlan = "free") {
+    validPlan(plan);
     return this.db.query(
-      'SELECT DISTINCT r."id", r."name" FROM "GraceRouteGroup" r JOIN "GraceRouteMember" rm ON rm."routeId" = r."id" JOIN "GraceModel" m ON m."id" = rm."modelId" JOIN "GraceKeyModel" p ON p."modelId" = m."id" JOIN "GraceProviderKey" k ON k."id" = p."keyId" WHERE r."enabled" = true AND m."enabled" = true AND p."permitted" = true AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true ORDER BY r."name", r."id"'
+      'SELECT r."id", r."name", bool_and(m."supportsVision") AS "supportsVision" FROM "GraceRouteGroup" r JOIN "GraceRouteMember" rm ON rm."routeId" = r."id" JOIN "GraceModel" m ON m."id" = rm."modelId" JOIN "GraceKeyModel" p ON p."modelId" = m."id" JOIN "GraceProviderKey" k ON k."id" = p."keyId" WHERE r."enabled" = true AND m."enabled" = true AND p."permitted" = true AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true AND ($1 = \'custom\' OR (r."requiredPlan" = \'free\' AND m."requiredPlan" = \'free\')) GROUP BY r."id", r."name" ORDER BY r."name", r."id"',
+      [plan]
     );
   }
 
-  async resolveRouteCandidates(routeId: string): Promise<
-    Array<{
-      provider: DiscoveryProvider;
-      upstreamId: string;
-      credential: string;
-    }>
-  > {
+  async resolveRouteCandidates(
+    routeId: string,
+    plan: EntitlementPlan = "free"
+  ): Promise<ResolvedCandidate[]> {
     validId(routeId);
-    const rows = await this.db.query<StoredKey & { upstreamId: string }>(
-      `SELECT "id", "provider", "encryptedCredential", "upstreamId" FROM (
-         SELECT k."id", k."provider", k."encryptedCredential", m."upstreamId", rm."priority" AS "routePriority", k."priority" AS "keyPriority", k."createdAt",
+    validPlan(plan);
+    const rows = await this.db.query<
+      CandidateRow & {
+        strategy: RoutingStrategy;
+        routePriority: number;
+        keyPriority: number;
+        keyRank: number | string;
+        connectionsOpened: number;
+        connectionFailures: number;
+        lastRuntimeStatus: string | null;
+        lastRuntimeLatencyMs: number | null;
+      }
+    >(
+      `SELECT * FROM (
+         SELECT k."id", k."provider", k."encryptedCredential", m."id" AS "modelId", m."upstreamId", m."supportsVision",
+           r."strategy", rm."priority" AS "routePriority", k."priority" AS "keyPriority", k."createdAt",
+           p."connectionsOpened", p."connectionFailures", p."lastRuntimeStatus", p."lastRuntimeLatencyMs",
            row_number() OVER (PARTITION BY m."id" ORDER BY k."priority", k."createdAt", k."id") AS "keyRank"
          FROM "GraceRouteGroup" r JOIN "GraceRouteMember" rm ON rm."routeId" = r."id"
          JOIN "GraceModel" m ON m."id" = rm."modelId" JOIN "GraceKeyModel" p ON p."modelId" = m."id"
          JOIN "GraceProviderKey" k ON k."id" = p."keyId"
          WHERE r."id" = $1 AND r."enabled" = true AND m."enabled" = true AND p."permitted" = true
            AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true
-       ) ranked ORDER BY "keyRank", "routePriority", "keyPriority", "createdAt", "id" LIMIT 3`,
-      [routeId]
+           AND ($2 = 'custom' OR (r."requiredPlan" = 'free' AND m."requiredPlan" = 'free'))
+           AND (p."cooldownUntil" IS NULL OR p."cooldownUntil" <= now())
+       ) ranked ORDER BY "keyRank", "routePriority", "keyPriority", "createdAt", "id" LIMIT 200`,
+      [routeId, plan]
     );
-    return rows.map((row) => ({
-      credential: decryptCredential(
-        row.encryptedCredential,
-        row.id,
-        this.encryptionKey
-      ),
-      provider: row.provider,
-      upstreamId: row.upstreamId,
-    }));
+    if (!rows.length) {
+      return [];
+    }
+    const byId = new Map(rows.map((row) => [`${row.modelId}/${row.id}`, row]));
+    const ranked = rankCandidates(
+      rows.map((row) => {
+        const total =
+          Number(row.connectionsOpened) + Number(row.connectionFailures);
+        return {
+          cooldownUntil: null,
+          id: `${row.modelId}/${row.id}`,
+          keyEnabled: true,
+          keyPermitted: true,
+          latencyMs:
+            row.lastRuntimeStatus === "opened"
+              ? row.lastRuntimeLatencyMs
+              : null,
+          modelEnabled: true,
+          priority:
+            Number(row.keyRank) * 100_000 +
+            Number(row.routePriority) * 101 +
+            Number(row.keyPriority),
+          providerEnabled: true,
+          successRate: total ? Number(row.connectionsOpened) / total : null,
+          supportsVision: row.supportsVision,
+        };
+      }),
+      { now: Date.now(), requiresVision: false, strategy: rows[0].strategy }
+    );
+    return ranked.slice(0, 3).map((candidate) => {
+      const row = byId.get(candidate.id);
+      if (!row) {
+        throw new Error("Routing candidate unavailable");
+      }
+      return this.decryptCandidate(row);
+    });
   }
 
-  listPublicModels() {
+  listPublicModels(plan: EntitlementPlan = "free") {
+    validPlan(plan);
     return this.db.query(
-      'SELECT DISTINCT m."id", m."provider", m."upstreamId", m."name" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" JOIN "GraceProviderKey" k ON k."id" = p."keyId" WHERE m."enabled" = true AND p."permitted" = true AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true ORDER BY m."name", m."id"'
+      'SELECT DISTINCT m."id", m."provider", m."upstreamId", m."name", m."supportsVision" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" JOIN "GraceProviderKey" k ON k."id" = p."keyId" WHERE m."enabled" = true AND p."permitted" = true AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true AND ($1 = \'custom\' OR m."requiredPlan" = \'free\') ORDER BY m."name", m."id"',
+      [plan]
     );
   }
 }

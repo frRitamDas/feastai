@@ -9,13 +9,16 @@ import {
 } from "@/lib/db/queries";
 import { ChatbotError } from "@/lib/errors";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 
-const documentSchema = z.object({
-  content: z.string(),
-  isManualEdit: z.boolean().optional(),
-  kind: z.enum(["text", "code", "image", "sheet"]),
-  title: z.string(),
-});
+const documentSchema = z
+  .object({
+    content: z.string().max(1_500_000),
+    isManualEdit: z.boolean().optional(),
+    kind: z.enum(["text", "code", "image", "sheet"]),
+    title: z.string().max(500),
+  })
+  .strict();
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -50,6 +53,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return new ChatbotError("forbidden:api").toResponse();
+  }
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 
@@ -73,7 +79,7 @@ export async function POST(request: Request) {
 
   try {
     ({ content, isManualEdit, kind, title } = documentSchema.parse(
-      await request.json()
+      await readLimitedJson(request, 2 * 1024 * 1024)
     ));
   } catch {
     return new ChatbotError(

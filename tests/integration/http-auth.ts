@@ -9,7 +9,6 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { genSaltSync, hashSync } from "bcrypt-ts";
 import { totpCode } from "../../lib/server/admin/totp";
-import { encryptCredential } from "../../lib/server/credential-crypto";
 
 async function main() {
   const db = new PGlite();
@@ -34,11 +33,15 @@ async function main() {
     "0017_grace_usage_attribution",
     "0018_grace_system_settings",
     "0019_grace_attachment_retention",
+    "0020_grace_runtime_routing",
+    "0021_grace_model_entitlements",
   ]) {
     await db.exec(await readFile(`lib/db/migrations/${migration}.sql`, "utf8"));
   }
   const encryptionKey = Buffer.alloc(32, 42).toString("base64");
-  const totpSecret = "JBSWY3DPEHPK3PXP";
+  const totpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  const bootstrapSecret =
+    "integration-only-bootstrap-secret-at-least-32-characters";
   const hash = hashSync("correct-password", genSaltSync(10));
   await db.query(
     'INSERT INTO "User" ("email", "password") VALUES ($1, $2), ($3, $2)',
@@ -60,6 +63,7 @@ async function main() {
         ...process.env,
         AUTH_SECRET: "integration-only-auth-secret-32-characters-long",
         AUTH_URL: base,
+        GRACE_BOOTSTRAP_SECRET: bootstrapSecret,
         GRACE_CATALOG_ENABLED: "1",
         GRACE_ENCRYPTION_KEY: encryptionKey,
         NODE_ENV: "development",
@@ -135,15 +139,28 @@ async function main() {
         ["person@example.com"]
       )
     ).rows;
-    await db.query(
-      'INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret") VALUES ($1, \'owner\', $2::jsonb)',
-      [
-        owner.id,
-        JSON.stringify(
-          encryptCredential(totpSecret, `admin:${owner.id}`, encryptionKey)
-        ),
-      ]
+    const bootstrapBody = {
+      bootstrapSecret,
+      code: totpCode(totpSecret, Math.floor(Date.now() / 30_000) - 1),
+      totpSecret,
+    };
+    const bootstrap = (body: object) =>
+      fetch(`${base}/api/administrator/bootstrap`, {
+        body: JSON.stringify(body),
+        headers: { ...reqHeaders, "Content-Type": "application/json" },
+        method: "POST",
+      });
+    assert.equal(
+      (await bootstrap({ ...bootstrapBody, bootstrapSecret: "wrong" })).status,
+      403
     );
+    assert.equal((await bootstrap(bootstrapBody)).status, 200);
+    assert.equal((await bootstrap(bootstrapBody)).status, 409);
+    const ownerRecord = await db.query(
+      'SELECT "totpSecret" FROM "GraceAdministrator" WHERE "userId" = $1',
+      [owner.id]
+    );
+    assert.equal(JSON.stringify(ownerRecord.rows).includes(totpSecret), false);
     const post = (action: string, body: object, cookie = sessionCookie) =>
       fetch(`${base}/api/administrator/${action}`, {
         body: JSON.stringify(body),
@@ -361,6 +378,121 @@ async function main() {
     });
     assert.equal(upload.status, 200, `${await upload.clone().text()} ${logs}`);
     const file = await upload.json();
+    const imageChatId = randomUUID();
+    const sendImage = () =>
+      fetch(`${base}/api/chat`, {
+        body: JSON.stringify({
+          id: imageChatId,
+          message: {
+            id: randomUUID(),
+            parts: [
+              {
+                mediaType: "image/png",
+                name: "test.png",
+                type: "file",
+                url: file.url,
+              },
+            ],
+            role: "user",
+          },
+          selectedChatModel: `grace/${modelId}`,
+          selectedVisibilityType: "private",
+        }),
+        headers: { ...reqHeaders, "Content-Type": "application/json" },
+        method: "POST",
+      });
+    const rejectedImage = await sendImage();
+    assert.equal(rejectedImage.status, 400);
+    assert.equal(
+      (await db.query('SELECT "id" FROM "Chat" WHERE "id" = $1', [imageChatId]))
+        .rows.length,
+      0
+    );
+    assert.equal(
+      (
+        await db.query<{ count: number }>(
+          'SELECT "count" FROM "GraceQuotaCounter" WHERE "userId" = $1',
+          [owner.id]
+        )
+      ).rows[0].count,
+      1
+    );
+    assert.equal(
+      (await post("model-vision", { enabled: true, modelId }, adminCookies))
+        .status,
+      200
+    );
+    const visionModels = await fetch(`${base}/api/models`, {
+      headers: reqHeaders,
+    });
+    assert.equal(
+      (await visionModels.json()).capabilities[`grace/${modelId}`].vision,
+      true
+    );
+    const imageChat = await sendImage();
+    assert.equal(
+      imageChat.status,
+      200,
+      `${await imageChat.clone().text()} ${logs}`
+    );
+    assert.ok((await imageChat.text()).includes("Hello from the mock model"));
+
+    const assistantRows = await db.query<{ id: string; chatId: string }>(
+      'SELECT "id", "chatId" FROM "Message_v2" WHERE "role" = \'assistant\' AND "chatId" IN ($1, $2)',
+      [chatId, imageChatId]
+    );
+    const firstAssistant = assistantRows.rows.find(
+      (row) => row.chatId === chatId
+    );
+    const secondAssistant = assistantRows.rows.find(
+      (row) => row.chatId === imageChatId
+    );
+    assert.ok(firstAssistant && secondAssistant);
+    const vote = (messageId: string, origin = base) =>
+      fetch(`${base}/api/vote`, {
+        body: JSON.stringify({ chatId, messageId, type: "up" }),
+        headers: {
+          ...reqHeaders,
+          "Content-Type": "application/json",
+          Origin: origin,
+        },
+        method: "PATCH",
+      });
+    assert.equal(
+      (await vote(firstAssistant.id, "https://evil.example")).status,
+      403
+    );
+    assert.equal((await vote(secondAssistant.id)).status, 404);
+    assert.equal((await vote(firstAssistant.id)).status, 200);
+    const documentId = randomUUID();
+    const document = (origin: string) =>
+      fetch(`${base}/api/document?id=${documentId}`, {
+        body: JSON.stringify({
+          content: "Safe note",
+          kind: "text",
+          title: "Note",
+        }),
+        headers: {
+          ...reqHeaders,
+          "Content-Type": "application/json",
+          Origin: origin,
+        },
+        method: "POST",
+      });
+    assert.equal((await document("https://evil.example")).status, 403);
+    assert.equal((await document(base)).status, 200);
+
+    const health = await db.query<{
+      lastRuntimeStatus: string;
+      connectionsOpened: number;
+      connectionFailures: number;
+    }>(
+      'SELECT "lastRuntimeStatus", "connectionsOpened", "connectionFailures" FROM "GraceKeyModel" WHERE "keyId" = $1 AND "modelId" = $2',
+      [secondKey, modelId]
+    );
+    assert.equal(health.rows[0].lastRuntimeStatus, "opened");
+    assert.equal(health.rows[0].connectionsOpened, 2);
+    assert.equal(health.rows[0].connectionFailures, 0);
     const image = await fetch(file.url, { headers: reqHeaders });
     assert.equal(image.status, 200);
     assert.equal(image.headers.get("content-type"), "image/png");
@@ -370,7 +502,7 @@ async function main() {
       body: new URLSearchParams({
         callbackUrl: base,
         csrfToken: csrf.csrfToken,
-        email: "other@example.com",
+        email: "OTHER@example.com",
         password: "correct-password",
       }),
       headers: {
@@ -396,6 +528,87 @@ async function main() {
         ["other@example.com"]
       )
     ).rows;
+    assert.equal(
+      (await post("model-plan", { modelId, plan: "custom" }, adminCookies))
+        .status,
+      200
+    );
+    const otherModels = async () =>
+      (
+        await (
+          await fetch(`${base}/api/models`, {
+            headers: { Cookie: otherCookie },
+          })
+        ).json()
+      ).eligibleModelIds as string[];
+    assert.equal((await otherModels()).includes(`grace/${modelId}`), false);
+    const deniedChat = await fetch(`${base}/api/chat`, {
+      body: JSON.stringify({
+        id: randomUUID(),
+        message: {
+          id: randomUUID(),
+          parts: [{ text: "Hello", type: "text" }],
+          role: "user",
+        },
+        selectedChatModel: `grace/${modelId}`,
+        selectedVisibilityType: "private",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: otherCookie,
+        Origin: base,
+      },
+      method: "POST",
+    });
+    assert.equal(deniedChat.status, 400);
+    assert.equal(
+      (
+        await db.query(
+          'SELECT "userId" FROM "GraceQuotaCounter" WHERE "userId" = $1',
+          [otherUser.id]
+        )
+      ).rows.length,
+      0
+    );
+    assert.equal(
+      (
+        await post(
+          "set-user-policy",
+          {
+            enabled: true,
+            hourlyQuota: 10,
+            plan: "custom",
+            planExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+            userId: otherUser.id,
+          },
+          adminCookies
+        )
+      ).status,
+      200
+    );
+    assert.equal((await otherModels()).includes(`grace/${modelId}`), true);
+    assert.equal(
+      (
+        await post(
+          "set-user-policy",
+          {
+            enabled: true,
+            hourlyQuota: 10,
+            plan: "custom",
+            planExpiresAt: new Date(Date.now() - 86_400_000).toISOString(),
+            userId: otherUser.id,
+          },
+          adminCookies
+        )
+      ).status,
+      200
+    );
+    assert.equal((await otherModels()).includes(`grace/${modelId}`), false);
+    assert.equal(
+      (await post("model-plan", { modelId, plan: "free" }, adminCookies))
+        .status,
+      200
+    );
     const disable = await post(
       "set-user-policy",
       { enabled: false, hourlyQuota: 10, plan: "free", userId: otherUser.id },
@@ -423,13 +636,29 @@ async function main() {
       401
     );
 
+    const unusedForm = new FormData();
+    unusedForm.append(
+      "file",
+      new File(["Unused"], "unused.txt", { type: "text/plain" })
+    );
+    const unusedUpload = await fetch(`${base}/api/files/upload`, {
+      body: unusedForm,
+      headers: reqHeaders,
+      method: "POST",
+    });
+    assert.equal(unusedUpload.status, 200);
+    const unused = await unusedUpload.json();
     const clear = await fetch(`${base}/api/files`, {
       headers: reqHeaders,
       method: "DELETE",
     });
     assert.equal(clear.status, 200);
     assert.equal((await clear.json()).removed, 1);
-    assert.equal((await fetch(file.url, { headers: reqHeaders })).status, 404);
+    assert.equal(
+      (await fetch(unused.url, { headers: reqHeaders })).status,
+      404
+    );
+    assert.equal((await fetch(file.url, { headers: reqHeaders })).status, 200);
     assert.equal(
       (await fetch(textFile.url, { headers: reqHeaders })).status,
       200
@@ -448,7 +677,7 @@ async function main() {
     const revoked = await fetch(`${base}/api/profile`, { headers: reqHeaders });
     assert.equal(revoked.status, 401);
     console.log(
-      "HTTP integration passed: admin MFA, catalog discovery/verification, mocked provider fallback/streaming with text attachments, usage, announcements, suspension, uploads and session revocation"
+      "HTTP integration passed: admin MFA, catalog discovery/verification, mocked provider fallback/streaming with private text and image attachments, runtime health, expiring entitlements, usage, announcements, suspension and session revocation"
     );
   } finally {
     child.kill("SIGTERM");

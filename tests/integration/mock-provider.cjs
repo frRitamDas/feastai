@@ -18,9 +18,11 @@ globalThis.fetch = async (input, init) => {
         firstProviderFailed = true;
         return Response.json({ error: { message: "busy" } }, { status: 503 });
       }
+      const messages = JSON.stringify(body.messages);
       if (
         !firstProviderFailed ||
-        !JSON.stringify(body.messages).includes("Secret memo for Grace")
+        (!messages.includes("Secret memo for Grace") &&
+          !messages.includes("data:image/png;base64,"))
       ) {
         return Response.json(
           { error: { message: "Missing attachment content" } },

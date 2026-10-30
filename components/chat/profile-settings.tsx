@@ -22,6 +22,8 @@ export function ProfileSettings({
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [plan, setPlan] = useState("free");
+  const [planExpiresAt, setPlanExpiresAt] = useState<string | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [message, setMessage] = useState("");
@@ -40,6 +42,8 @@ export function ProfileSettings({
         if (active) {
           setName(profile.name);
           setEmail(profile.email);
+          setPlan(profile.plan);
+          setPlanExpiresAt(profile.planExpiresAt);
           setMessage("");
         }
       })
@@ -94,6 +98,13 @@ export function ProfileSettings({
             out all sessions.
           </DialogDescription>
         </DialogHeader>
+        <p className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          Access plan:{" "}
+          <strong className="capitalize text-foreground">{plan}</strong>
+          {plan === "custom" && planExpiresAt
+            ? ` · expires ${new Date(planExpiresAt).toLocaleDateString()}`
+            : ""}
+        </p>
         <form className="space-y-4" onSubmit={save}>
           <label className="block text-sm" htmlFor="profile-email">
             Email

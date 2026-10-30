@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  applicationOrigin,
   conversationAccess,
   isSameOrigin,
   renameConversationSchema,
@@ -39,6 +40,42 @@ test("conversation changes require a matching origin", () => {
       "not-a-url"
     ),
     false
+  );
+});
+
+test("production origin is the configured HTTPS origin, not a proxy or attacker host", () => {
+  const config = { authUrl: "https://graceorg.vercel.app", production: true };
+  assert.equal(
+    applicationOrigin("http://127.0.0.1:3000/api/files", config),
+    "https://graceorg.vercel.app"
+  );
+  assert.equal(
+    isSameOrigin(
+      "http://127.0.0.1:3000/api/chat",
+      "https://graceorg.vercel.app",
+      config
+    ),
+    true
+  );
+  assert.equal(
+    isSameOrigin(
+      "https://evil.example/api/chat",
+      "https://evil.example",
+      config
+    ),
+    false
+  );
+  assert.equal(
+    isSameOrigin(
+      "http://graceorg.vercel.app/api/chat",
+      "http://graceorg.vercel.app",
+      { authUrl: "http://graceorg.vercel.app", production: true }
+    ),
+    false
+  );
+  assert.equal(
+    applicationOrigin("https://evil.example", { production: true }),
+    null
   );
 });
 

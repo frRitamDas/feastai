@@ -1,12 +1,9 @@
 "use server";
 
-import { generateText, type UIMessage } from "ai";
+import type { UIMessage } from "ai";
 import { cookies } from "next/headers";
 import { auth } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
-import { titleModel } from "@/lib/ai/models";
-import { titlePrompt } from "@/lib/ai/prompts";
-import { getTitleModel } from "@/lib/ai/providers";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getChatById,
@@ -20,23 +17,21 @@ export async function saveChatModelAsCookie(model: string) {
   cookieStore.set("chat-model", model);
 }
 
+// biome-ignore lint/suspicious/useAwait: Server actions must be async.
 export async function generateTitleFromUserMessage({
   message,
 }: {
   message: UIMessage;
 }) {
-  const { text } = await generateText({
-    instructions: titlePrompt,
-    model: getTitleModel(),
-    prompt: getTextFromMessage(message),
-    providerOptions: {
-      gateway: { order: titleModel.gatewayOrder },
-    },
-  });
-  return text
-    .replace(/^[#*"\s]+/, "")
-    .replace(/["]+$/, "")
-    .trim();
+  // Derive a useful title without a second provider call or additional tokens.
+  const text = getTextFromMessage(message).replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "Attachment";
+  }
+  const characters = Array.from(text);
+  return characters.length > 64
+    ? `${characters.slice(0, 63).join("").trimEnd()}…`
+    : text;
 }
 
 export async function deleteTrailingMessages({ id }: { id: string }) {

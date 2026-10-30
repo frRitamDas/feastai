@@ -2,6 +2,7 @@ import { ipAddress } from "@vercel/functions";
 import { cookies } from "next/headers";
 import { z } from "zod";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
+import { bootstrapAdministrator } from "@/lib/server/admin/bootstrap";
 import {
   adminProofVersion,
   audit,
@@ -19,6 +20,7 @@ import {
   encryptCredential,
 } from "@/lib/server/credential-crypto";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
+import { verifyTurnstileChallenge } from "@/lib/server/security/turnstile";
 
 const headers = {
   "Cache-Control": "private, no-store",
@@ -37,6 +39,7 @@ const bodySchema = z
     announcementId: uuid.optional(),
     baseUrl: z.url().max(512).optional(),
     body: z.string().trim().min(1).max(2000).optional(),
+    challengeToken: z.string().min(1).max(2048).optional(),
     chatEnabled: z.boolean().optional(),
     code: z
       .string()
@@ -50,6 +53,7 @@ const bodySchema = z
     modelId: uuid.optional(),
     name: z.string().trim().min(1).max(300).optional(),
     plan: z.enum(["free", "custom"]).optional(),
+    planExpiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
     priority: z.number().int().min(0).max(100).optional(),
     provider: z
       .enum([
@@ -67,6 +71,7 @@ const bodySchema = z
     registrationEnabled: z.boolean().optional(),
     role: z.enum(["owner", "operator", "viewer"]).optional(),
     routeId: uuid.optional(),
+    strategy: z.enum(["manual", "fastest", "reliable", "balanced"]).optional(),
     title: z.string().trim().min(1).max(120).optional(),
     totpSecret: z.string().min(16).max(128).optional(),
     upstreamId: z.string().trim().min(1).max(300).optional(),
@@ -100,7 +105,7 @@ export async function GET(_request: Request, context: Context) {
       'SELECT "model", "provider", "upstreamModel", count(*)::int AS "completedCalls", sum("inputTokens")::bigint AS "inputTokens", sum("outputTokens")::bigint AS "outputTokens", count(*) FILTER (WHERE "inputTokens" IS NULL OR "outputTokens" IS NULL)::int AS "incompleteReports" FROM "GraceUsageEvent" WHERE "createdAt" >= now() - interval \'30 days\' GROUP BY "model", "provider", "upstreamModel" ORDER BY count(*) DESC LIMIT 50'
     );
     const users = await db.query(
-      'SELECT u."id", u."email", u."createdAt", u."isAnonymous", a."role" AS "adminRole", a."enabled" AS "adminEnabled", COALESCE(p."enabled", true) AS "accountEnabled", COALESCE(p."hourlyQuota", 10) AS "hourlyQuota", COALESCE(p."plan", \'free\') AS "plan" FROM "User" u LEFT JOIN "GraceAdministrator" a ON a."userId" = u."id" LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" ORDER BY u."createdAt" DESC LIMIT 100'
+      'SELECT u."id", u."email", u."createdAt", u."isAnonymous", a."role" AS "adminRole", a."enabled" AS "adminEnabled", COALESCE(p."enabled", true) AS "accountEnabled", COALESCE(p."hourlyQuota", 10) AS "hourlyQuota", COALESCE(p."plan", \'free\') AS "plan", p."planExpiresAt" FROM "User" u LEFT JOIN "GraceAdministrator" a ON a."userId" = u."id" LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" ORDER BY u."createdAt" DESC LIMIT 100'
     );
     const announcements = await db.query(
       'SELECT "id", "title", "body", "enabled", "createdAt" FROM "GraceAnnouncement" ORDER BY "createdAt" DESC LIMIT 100'
@@ -144,6 +149,9 @@ export async function POST(request: Request, context: Context) {
   }
   try {
     const { action } = await context.params;
+    if (action === "bootstrap") {
+      return bootstrapAdministrator(request);
+    }
     const identity = await getAdminIdentity();
     if (!identity) {
       return reply({ error: "Not authorized" }, 401);
@@ -158,6 +166,17 @@ export async function POST(request: Request, context: Context) {
       await enforceIpRateLimit(identity.userId, "admin");
       if (!data.code || !process.env.AUTH_SECRET) {
         return reply({ error: "Invalid verification" }, 400);
+      }
+      const challengeAccepted = await verifyTurnstileChallenge({
+        action: "admin-mfa",
+        expectedHost: process.env.AUTH_URL,
+        production: process.env.NODE_ENV === "production",
+        secret: process.env.GRACE_TURNSTILE_SECRET,
+        token: data.challengeToken ?? null,
+      });
+      if (!challengeAccepted) {
+        await audit(identity.userId, "mfa-challenge", null, "denied");
+        return reply({ error: "Invalid verification" }, 401);
       }
       const db = getAdminDatabase();
       const accepted = await db.transaction(async (tx) => {
@@ -299,13 +318,19 @@ export async function POST(request: Request, context: Context) {
           data.userId,
         ]);
         const updated = await tx.query(
-          `INSERT INTO "GraceUserPolicy" ("userId", "enabled", "hourlyQuota", "plan")
-         SELECT u."id", $2, $3, $4 FROM "User" u
+          `INSERT INTO "GraceUserPolicy" ("userId", "enabled", "hourlyQuota", "plan", "planExpiresAt")
+         SELECT u."id", $2, $3, $4, $5::timestamptz FROM "User" u
          WHERE u."id" = $1 AND NOT EXISTS
            (SELECT 1 FROM "GraceAdministrator" a WHERE a."userId" = u."id" AND a."enabled" = true)
-         ON CONFLICT ("userId") DO UPDATE SET "enabled" = EXCLUDED."enabled", "hourlyQuota" = EXCLUDED."hourlyQuota", "plan" = EXCLUDED."plan", "updatedAt" = now()
+         ON CONFLICT ("userId") DO UPDATE SET "enabled" = EXCLUDED."enabled", "hourlyQuota" = EXCLUDED."hourlyQuota", "plan" = EXCLUDED."plan", "planExpiresAt" = EXCLUDED."planExpiresAt", "updatedAt" = now()
          RETURNING "userId"`,
-          [data.userId, data.enabled, data.hourlyQuota, data.plan]
+          [
+            data.userId,
+            data.enabled,
+            data.hourlyQuota,
+            data.plan,
+            data.plan === "custom" ? (data.planExpiresAt ?? null) : null,
+          ]
         );
         if (updated.length && !data.enabled) {
           await tx.query(
@@ -422,6 +447,21 @@ export async function POST(request: Request, context: Context) {
         }
         await store.setModelEnabled(data.modelId, data.enabled);
         break;
+      case "model-plan":
+        if (admin.role !== "owner") {
+          return reply({ error: "Not authorized" }, 403);
+        }
+        if (!(data.modelId && data.plan)) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setModelPlan(data.modelId, data.plan);
+        break;
+      case "model-vision":
+        if (!data.modelId || data.enabled === undefined) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setModelVision(data.modelId, data.enabled);
+        break;
       case "permission":
         if (!(data.keyId && data.modelId) || data.enabled === undefined) {
           return reply({ error: "Invalid request" }, 400);
@@ -439,6 +479,21 @@ export async function POST(request: Request, context: Context) {
           return reply({ error: "Invalid request" }, 400);
         }
         await store.setRouteEnabled(data.routeId, data.enabled);
+        break;
+      case "route-plan":
+        if (admin.role !== "owner") {
+          return reply({ error: "Not authorized" }, 403);
+        }
+        if (!(data.routeId && data.plan)) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setRoutePlan(data.routeId, data.plan);
+        break;
+      case "route-strategy":
+        if (!(data.routeId && data.strategy)) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setRouteStrategy(data.routeId, data.strategy);
         break;
       case "route-member":
         if (!(data.routeId && data.modelId) || data.priority === undefined) {

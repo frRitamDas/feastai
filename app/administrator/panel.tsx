@@ -2,8 +2,9 @@
 // biome-ignore-all lint/suspicious/noAlert: Explicit confirmation is required before deleting provider credentials.
 "use client";
 
+import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -28,6 +29,14 @@ type Model = {
   lastCheckAt: string | null;
   lastCheckStatus: string | null;
   lastLatencyMs: number | null;
+  supportsVision: boolean;
+  requiredPlan: "free" | "custom";
+  connectionsOpened: number;
+  connectionFailures: number;
+  lastRuntimeAt: string | null;
+  lastRuntimeStatus: string | null;
+  lastRuntimeLatencyMs: number | null;
+  cooldownUntil: string | null;
 };
 type Overview = {
   announcements: {
@@ -66,6 +75,8 @@ type Overview = {
     id: string;
     name: string;
     enabled: boolean;
+    strategy: "manual" | "fastest" | "reliable" | "balanced";
+    requiredPlan: "free" | "custom";
     modelId: string | null;
     modelName: string | null;
     provider: string | null;
@@ -81,6 +92,7 @@ type Overview = {
     accountEnabled: boolean;
     hourlyQuota: number;
     plan: "free" | "custom";
+    planExpiresAt: string | null;
   }[];
   logs: {
     id: string;
@@ -103,6 +115,8 @@ const sections = [
 export function AdminConsole({ verified }: { verified: boolean }) {
   const router = useRouter();
   const [code, setCode] = useState("");
+  const [challengeToken, setChallengeToken] = useState("");
+  const challengeRef = useRef<TurnstileInstance>(null);
   const [section, setSection] =
     useState<(typeof sections)[number]>("Dashboard");
   const [data, setData] = useState<Overview | null>(null);
@@ -128,6 +142,7 @@ export function AdminConsole({ verified }: { verified: boolean }) {
   const [policyUser, setPolicyUser] = useState("");
   const [policyQuota, setPolicyQuota] = useState("10");
   const [policyPlan, setPolicyPlan] = useState("free");
+  const [policyExpiry, setPolicyExpiry] = useState("");
   const [policyEnabled, setPolicyEnabled] = useState(true);
   const refresh = useCallback(async () => {
     const response = await fetch("/api/administrator/overview", {
@@ -195,9 +210,16 @@ export function AdminConsole({ verified }: { verified: boolean }) {
         </p>
         <form
           className="space-y-4"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            action("mfa", { code });
+            const verifiedMfa = await action("mfa", {
+              code,
+              ...(challengeToken ? { challengeToken } : {}),
+            });
+            if (!verifiedMfa) {
+              setChallengeToken("");
+              challengeRef.current?.reset();
+            }
           }}
         >
           <Input
@@ -208,7 +230,28 @@ export function AdminConsole({ verified }: { verified: boolean }) {
             placeholder="000000"
             value={code}
           />
-          <Button disabled={busy || code.length !== 6} type="submit">
+          {process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY ? (
+            <Turnstile
+              onError={() => setChallengeToken("")}
+              onExpire={() => setChallengeToken("")}
+              onSuccess={setChallengeToken}
+              options={{ action: "admin-mfa" }}
+              ref={challengeRef}
+              siteKey={process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY}
+            />
+          ) : process.env.NODE_ENV === "production" ? (
+            <p className="text-sm text-destructive">
+              Administrator verification is unavailable.
+            </p>
+          ) : null}
+          <Button
+            disabled={
+              busy ||
+              code.length !== 6 ||
+              (process.env.NODE_ENV === "production" && !challengeToken)
+            }
+            type="submit"
+          >
             Verify
           </Button>
         </form>
@@ -476,7 +519,9 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                   <h2 className="font-semibold">Automatic routes</h2>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Group interchangeable models across providers. Only verified
-                    and permitted members are used; lower numbers run first.
+                    and permitted members are used. Priority breaks ties; health
+                    strategies use observed connection attempts, not completion
+                    rates.
                   </p>
                   <form
                     className="mt-4 flex flex-wrap gap-3"
@@ -589,6 +634,50 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                               {route.enabled ? "Disable" : "Enable"}
                             </Button>
                           </div>
+                          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                            Routing strategy
+                            <select
+                              aria-label={`Routing strategy for ${route.name}`}
+                              className="rounded-lg border bg-background p-2"
+                              disabled={busy || !canEdit}
+                              onChange={(event) =>
+                                action("route-strategy", {
+                                  routeId: route.id,
+                                  strategy: event.target.value,
+                                })
+                              }
+                              value={route.strategy}
+                            >
+                              <option value="manual">Priority</option>
+                              <option value="fastest">
+                                Fastest connection
+                              </option>
+                              <option value="reliable">
+                                Most reliable connection
+                              </option>
+                              <option value="balanced">Balanced</option>
+                            </select>
+                          </label>
+                          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                            Entitlement
+                            <select
+                              aria-label={`Required plan for ${route.name}`}
+                              className="rounded-lg border bg-background p-2"
+                              disabled={
+                                busy || !canEdit || data.role !== "owner"
+                              }
+                              onChange={(event) =>
+                                action("route-plan", {
+                                  plan: event.target.value,
+                                  routeId: route.id,
+                                })
+                              }
+                              value={route.requiredPlan}
+                            >
+                              <option value="free">Free</option>
+                              <option value="custom">Custom</option>
+                            </select>
+                          </label>
                           {data.routes
                             .filter(
                               (member) =>
@@ -677,7 +766,9 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Lower priority numbers are selected first when multiple
-                  verified keys can serve the same model.
+                  verified keys can serve the same model. Enable images only
+                  after confirming the provider model accepts image input; the
+                  text verification check does not test vision.
                 </p>
                 {data.keys.map((key) => (
                   <div className="flex items-center gap-3" key={key.id}>
@@ -716,10 +807,21 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                           <p className="text-sm text-muted-foreground">
                             {model.provider} · {model.upstreamId} ·{" "}
                             {model.verifiedAt ? "verified" : "not verified"} ·{" "}
-                            {model.available ? "registered" : "not discovered"}
+                            {model.available ? "registered" : "not discovered"}{" "}
+                            · {model.requiredPlan} plan
                             {model.lastCheckAt
                               ? ` · last check: ${model.lastCheckStatus} (${model.lastLatencyMs} ms)`
                               : " · never checked"}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Connections: {model.connectionsOpened} opened,{" "}
+                            {model.connectionFailures} failed
+                            {model.lastRuntimeAt
+                              ? ` · latest: ${model.lastRuntimeStatus} (${model.lastRuntimeLatencyMs} ms)`
+                              : " · no runtime observations"}
+                            {model.cooldownUntil
+                              ? ` · cooldown until ${new Date(model.cooldownUntil).toLocaleTimeString()}`
+                              : ""}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -747,6 +849,35 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                             variant="outline"
                           >
                             {model.permitted ? "Revoke" : "Permit"}
+                          </Button>
+                          <select
+                            aria-label={`Required plan for ${model.name}`}
+                            className="rounded-lg border bg-background p-2 text-sm"
+                            disabled={busy || !canEdit || data.role !== "owner"}
+                            onChange={(event) =>
+                              action("model-plan", {
+                                modelId: model.id,
+                                plan: event.target.value,
+                              })
+                            }
+                            value={model.requiredPlan}
+                          >
+                            <option value="free">Free</option>
+                            <option value="custom">Custom</option>
+                          </select>
+                          <Button
+                            disabled={busy || !canEdit}
+                            onClick={() =>
+                              action("model-vision", {
+                                enabled: !model.supportsVision,
+                                modelId: model.id,
+                              })
+                            }
+                            variant="outline"
+                          >
+                            {model.supportsVision
+                              ? "Disable images"
+                              : "Enable images"}
                           </Button>
                           <Button
                             disabled={busy || !canEdit}
@@ -972,13 +1103,19 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                 )}
                 {data.role === "owner" && (
                   <form
-                    className="mb-6 grid gap-3 rounded-2xl border p-5 md:grid-cols-5"
+                    className="mb-6 grid gap-3 rounded-2xl border p-5 md:grid-cols-6"
                     onSubmit={async (event) => {
                       event.preventDefault();
                       await action("set-user-policy", {
                         enabled: policyEnabled,
                         hourlyQuota: Number(policyQuota),
                         plan: policyPlan,
+                        planExpiresAt:
+                          policyPlan === "custom" && policyExpiry
+                            ? new Date(
+                                `${policyExpiry}T23:59:59.999Z`
+                              ).toISOString()
+                            : null,
                         userId: policyUser,
                       });
                     }}
@@ -994,6 +1131,9 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                         if (selected) {
                           setPolicyQuota(String(selected.hourlyQuota));
                           setPolicyPlan(selected.plan);
+                          setPolicyExpiry(
+                            selected.planExpiresAt?.slice(0, 10) ?? ""
+                          );
                           setPolicyEnabled(selected.accountEnabled);
                         }
                       }}
@@ -1027,6 +1167,13 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                       <option value="free">Free</option>
                       <option value="custom">Custom</option>
                     </select>
+                    <Input
+                      aria-label="Custom plan expiry (UTC date)"
+                      disabled={policyPlan !== "custom"}
+                      onChange={(event) => setPolicyExpiry(event.target.value)}
+                      type="date"
+                      value={policyExpiry}
+                    />
                     <select
                       aria-label="Account access"
                       className="rounded-lg border bg-background px-3"
@@ -1041,9 +1188,11 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     <Button disabled={busy} type="submit">
                       Save policy
                     </Button>
-                    <p className="text-sm text-muted-foreground md:col-span-5">
-                      Per-account hourly generation requests. Network limits
-                      still apply. Plans are labels only; no billing is
+                    <p className="text-sm text-muted-foreground md:col-span-6">
+                      Per-account hourly generation requests; network limits
+                      still apply. Custom access can expire at the end of the
+                      selected UTC day (blank means no expiry). Plans control
+                      shared catalog access, not billing; payments are not
                       connected.
                     </p>
                   </form>
@@ -1060,7 +1209,11 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     <span>
                       {user.email} ·{" "}
                       {user.accountEnabled ? "enabled" : "disabled"} ·{" "}
-                      {user.plan} · {user.hourlyQuota}/hour
+                      {user.plan}
+                      {user.planExpiresAt
+                        ? ` until ${user.planExpiresAt.slice(0, 10)} UTC`
+                        : ""}{" "}
+                      · {user.hourlyQuota}/hour
                     </span>
                     <span className="text-muted-foreground">
                       {user.isAnonymous

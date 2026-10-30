@@ -6,14 +6,17 @@ type VerifyOptions = {
   request?: typeof fetch;
 };
 
-/** Registration requires Cloudflare's server-side verification in production. */
-export async function verifyRegistrationChallenge({
+/** Verify a single-use, hostname- and action-bound Cloudflare challenge. */
+export async function verifyTurnstileChallenge({
   token,
   secret,
   expectedHost,
   production,
   request = fetch,
-}: VerifyOptions): Promise<boolean> {
+  action,
+}: VerifyOptions & {
+  action: "register" | "admin-mfa" | "admin-bootstrap";
+}): Promise<boolean> {
   if (!secret || !expectedHost) {
     return !production && !secret;
   }
@@ -53,9 +56,14 @@ export async function verifyRegistrationChallenge({
       checked.success === true &&
       typeof checked.hostname === "string" &&
       checked.hostname.toLowerCase() === host &&
-      checked.action === "register"
+      checked.action === action
     );
   } catch {
     return false;
   }
+}
+
+/** Registration requires Cloudflare verification in production. */
+export function verifyRegistrationChallenge(options: VerifyOptions) {
+  return verifyTurnstileChallenge({ ...options, action: "register" });
 }

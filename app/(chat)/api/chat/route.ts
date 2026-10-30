@@ -31,6 +31,7 @@ import {
   createStreamId,
   deleteChatById,
   getChatById,
+  getEffectiveEntitlement,
   getMessagesByChatId,
   getPrivateAttachment,
   getSystemSettings,
@@ -45,7 +46,10 @@ import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
-import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import {
+  applicationOrigin,
+  isSameOrigin,
+} from "@/lib/server/conversations/authorization";
 import { createFallbackModel } from "@/lib/server/providers/fallback";
 import { attachmentId } from "@/lib/server/security/attachments";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
@@ -114,11 +118,13 @@ export async function POST(request: Request) {
         NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
       >
     > = [];
+    let sharedCatalog: ReturnType<typeof getRuntimeCatalog> = null;
     if (
       selectedChatModel.startsWith("grace/") ||
       selectedChatModel.startsWith("auto/")
     ) {
       const catalog = getRuntimeCatalog();
+      sharedCatalog = catalog;
       const isAutomatic = selectedChatModel.startsWith("auto/");
       const modelId = selectedChatModel.slice(
         isAutomatic ? "auto/".length : "grace/".length
@@ -134,9 +140,13 @@ export async function POST(request: Request) {
           "The selected model is unavailable."
         ).toResponse();
       }
+      const entitlement = await getEffectiveEntitlement(session.user.id);
+      if (!entitlement) {
+        return new ChatbotError("unauthorized:chat").toResponse();
+      }
       sharedModels = isAutomatic
-        ? await catalog.resolveRouteCandidates(modelId)
-        : await catalog.resolveCandidates(modelId);
+        ? await catalog.resolveRouteCandidates(modelId, entitlement.plan)
+        : await catalog.resolveCandidates(modelId, entitlement.plan);
       if (!sharedModels.length) {
         return new ChatbotError(
           "bad_request:api",
@@ -164,19 +174,6 @@ export async function POST(request: Request) {
       }
       messagesFromDb = await getMessagesByChatId({ id });
     }
-    if (!(await reserveChatQuota(session.user.id))) {
-      return new ChatbotError("rate_limit:chat").toResponse();
-    }
-    if (!chat && message?.role === "user") {
-      await saveChat({
-        id,
-        title: "New chat",
-        userId: session.user.id,
-        visibility: selectedVisibilityType,
-      });
-      titlePromise = generateTitleFromUserMessage({ message });
-    }
-
     let uiMessages: ChatMessage[];
 
     if (isToolApprovalFlow && messages) {
@@ -204,21 +201,25 @@ export async function POST(request: Request) {
         uiMessages.some((item) =>
           item.parts.some(
             (part) =>
-              (part.type === "file" && part.mediaType !== "text/plain") ||
-              part.type === "dynamic-tool" ||
-              part.type.startsWith("tool-")
+              part.type === "dynamic-tool" || part.type.startsWith("tool-")
           )
         ))
     ) {
       return new ChatbotError(
         "bad_request:api",
-        "This model currently supports text-only conversations without tools."
+        "Shared provider models do not support tool conversations."
       ).toResponse();
     }
 
     const modelConfig = chatModels.find((m) => m.id === chatModel);
-    const modelCapabilities = await getCapabilities();
-    const capabilities = modelCapabilities[chatModel];
+    const capabilities = sharedModel
+      ? {
+          reasoning: false,
+          tools: false,
+          // Every possible fallback must be explicitly marked as image-capable.
+          vision: sharedModels.every((candidate) => candidate.supportsVision),
+        }
+      : (await getCapabilities())[chatModel];
     const isReasoningModel = capabilities?.reasoning === true;
     const supportsTools = capabilities?.tools === true;
     const fileParts = uiMessages.flatMap((item) =>
@@ -242,7 +243,10 @@ export async function POST(request: Request) {
         if (part.type !== "file") {
           return null;
         }
-        const fileId = attachmentId(part.url, request.url);
+        const publicOrigin = applicationOrigin(request.url);
+        const fileId = publicOrigin
+          ? attachmentId(part.url, publicOrigin)
+          : null;
         if (!fileId) {
           return null;
         }
@@ -259,6 +263,10 @@ export async function POST(request: Request) {
         "bad_request:api",
         "Attachments are unavailable or exceed the 4 MB conversation limit."
       ).toResponse();
+    }
+    // Invalid models, tool approvals and attachments must not consume quota.
+    if (!(await reserveChatQuota(session.user.id))) {
+      return new ChatbotError("rate_limit:chat").toResponse();
     }
     if (
       !(await claimPrivateAttachments(
@@ -295,6 +303,16 @@ export async function POST(request: Request) {
         };
       }),
     }));
+
+    if (!chat && message?.role === "user") {
+      await saveChat({
+        id,
+        title: "New chat",
+        userId: session.user.id,
+        visibility: selectedVisibilityType,
+      });
+      titlePromise = generateTitleFromUserMessage({ message });
+    }
 
     const { longitude, latitude, city, country } = geolocation(request);
 
@@ -401,9 +419,23 @@ export async function POST(request: Request) {
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
           model: sharedModel
-            ? createFallbackModel(sharedModels, undefined, (selected) => {
-                actualProvider = selected;
-              })
+            ? createFallbackModel(
+                sharedModels,
+                undefined,
+                (selected) => {
+                  actualProvider = selected;
+                },
+                async ({ keyId, modelId, status, latencyMs }) => {
+                  if (sharedCatalog && keyId && modelId) {
+                    await sharedCatalog.recordConnection(
+                      keyId,
+                      modelId,
+                      status,
+                      latencyMs
+                    );
+                  }
+                }
+              )
             : getLanguageModel(chatModel),
           ...(sharedModel
             ? {

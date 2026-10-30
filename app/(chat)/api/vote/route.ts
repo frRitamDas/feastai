@@ -1,13 +1,22 @@
 import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
-import { getChatById, getVotesByChatId, voteMessage } from "@/lib/db/queries";
+import {
+  getChatById,
+  getMessageById,
+  getVotesByChatId,
+  voteMessage,
+} from "@/lib/db/queries";
 import { ChatbotError } from "@/lib/errors";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 
-const voteSchema = z.object({
-  chatId: z.string(),
-  messageId: z.string(),
-  type: z.enum(["up", "down"]),
-});
+const voteSchema = z
+  .object({
+    chatId: z.uuid(),
+    messageId: z.uuid(),
+    type: z.enum(["up", "down"]),
+  })
+  .strict();
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -42,12 +51,17 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return new ChatbotError("forbidden:api").toResponse();
+  }
   let chatId: string;
   let messageId: string;
   let type: "up" | "down";
 
   try {
-    ({ chatId, messageId, type } = voteSchema.parse(await request.json()));
+    ({ chatId, messageId, type } = voteSchema.parse(
+      await readLimitedJson(request, 4096)
+    ));
   } catch {
     return new ChatbotError(
       "bad_request:api",
@@ -69,6 +83,11 @@ export async function PATCH(request: Request) {
 
   if (chat.userId !== session.user.id) {
     return new ChatbotError("forbidden:vote").toResponse();
+  }
+
+  const [message] = await getMessageById({ id: messageId });
+  if (!message || message.chatId !== chatId || message.role !== "assistant") {
+    return new ChatbotError("not_found:vote").toResponse();
   }
 
   await voteMessage({

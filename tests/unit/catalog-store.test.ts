@@ -66,6 +66,22 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
         "utf8"
       )
     );
+    await db.exec(
+      await readFile("lib/db/migrations/0020_grace_runtime_routing.sql", "utf8")
+    );
+    await db.exec('CREATE TABLE "User" ("id" uuid PRIMARY KEY, "email" text)');
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0013_grace_account_policies.sql",
+        "utf8"
+      )
+    );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0021_grace_model_entitlements.sql",
+        "utf8"
+      )
+    );
     const store = new CatalogStore(
       adapter(db),
       randomBytes(32).toString("base64")
@@ -200,6 +216,63 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
       candidates.map((candidate) => candidate.provider),
       ["groq", "gemini", "groq"]
     );
+    await store.setModelPlan(googleModel, "custom");
+    assert.equal((await store.resolveCandidates(googleModel)).length, 0);
+    assert.equal(
+      (await store.resolveCandidates(googleModel, "custom")).length,
+      1
+    );
+    assert.equal((await store.listPublicModels()).length, 1);
+    assert.equal((await store.listPublicModels("custom")).length, 2);
+    assert.deepEqual(
+      (await store.resolveRouteCandidates(route)).map((item) => item.provider),
+      ["groq", "groq"]
+    );
+    await store.setRoutePlan(route, "custom");
+    assert.equal((await store.listPublicRoutes()).length, 0);
+    assert.equal((await store.listPublicRoutes("custom")).length, 1);
+    assert.equal((await store.resolveRouteCandidates(route)).length, 0);
+    assert.equal(
+      (await store.resolveRouteCandidates(route, "custom")).length,
+      3
+    );
+    await store.setRoutePlan(route, "free");
+    await store.setModelPlan(googleModel, "free");
+    assert.equal((await store.listPublicRoutes())[0].supportsVision, false);
+    await store.setModelVision(model, true);
+    assert.equal((await store.listPublicRoutes())[0].supportsVision, false);
+    await store.setModelVision(googleModel, true);
+    assert.equal((await store.listPublicRoutes())[0].supportsVision, true);
+    assert.equal((await store.resolve(model))?.supportsVision, true);
+
+    await store.recordConnection(alternate, model, "opened", 400);
+    await store.recordConnection(key, model, "opened", 500);
+    await store.recordConnection(googleKey, googleModel, "opened", 20);
+    await store.setRouteStrategy(route, "fastest");
+    assert.equal(
+      (await store.resolveRouteCandidates(route))[0].provider,
+      "gemini"
+    );
+    await store.recordConnection(googleKey, googleModel, "unavailable", 30);
+    assert.equal(
+      (await store.resolveRouteCandidates(route)).some(
+        (item) => item.provider === "gemini"
+      ),
+      false
+    );
+    const health = (await store.listCatalog()).find(
+      (item) => item.keyId === googleKey && item.id === googleModel
+    );
+    assert.equal(health?.connectionsOpened, 1);
+    assert.equal(health?.connectionFailures, 1);
+    assert.equal(health?.lastRuntimeStatus, "unavailable");
+    assert.ok(health?.cooldownUntil);
+    assert.equal(
+      await store.verify(googleKey, googleModel, googleVerify),
+      true
+    );
+    assert.equal((await store.resolveRouteCandidates(route)).length, 3);
+    await store.setRouteStrategy(route, "manual");
     await store.removeRouteMember(route, model);
     assert.deepEqual(
       (await store.resolveRouteCandidates(route)).map(
@@ -293,14 +366,19 @@ test("Cloudflare and custom provider credentials stay encrypted through the veri
   const previous = process.env.GRACE_CUSTOM_PROVIDER_HOSTS;
   process.env.GRACE_CUSTOM_PROVIDER_HOSTS = "api.example.com";
   try {
+    await db.exec('CREATE TABLE "User" ("id" uuid PRIMARY KEY, "email" text)');
     for (const migration of [
       "0001_grace_provider_catalog",
       "0004_grace_gemini_provider",
       "0006_grace_routing_priority",
       "0007_grace_huggingface_provider",
       "0009_grace_cloudflare_provider",
+      "0010_grace_routing_groups",
       "0011_grace_custom_provider",
       "0012_grace_verification_health",
+      "0013_grace_account_policies",
+      "0020_grace_runtime_routing",
+      "0021_grace_model_entitlements",
     ]) {
       await db.exec(
         await readFile(`lib/db/migrations/${migration}.sql`, "utf8")
