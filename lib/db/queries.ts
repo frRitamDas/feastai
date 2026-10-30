@@ -1,4 +1,5 @@
 import "server-only";
+import { randomInt } from "node:crypto";
 
 import {
   and,
@@ -40,17 +41,97 @@ import { generateHashedPassword } from "./utils";
 const client = postgres(process.env.POSTGRES_URL ?? "");
 const db = drizzle(client);
 
-export async function isUserEnabled(id: string): Promise<boolean> {
-  const rows = await client.unsafe<{ enabled: boolean }[]>(
-    'SELECT COALESCE(p."enabled", true) AS "enabled" FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1',
+export async function getUserSessionState(id: string) {
+  const rows = await client.unsafe<
+    { enabled: boolean; sessionVersion: number }[]
+  >(
+    'SELECT COALESCE(p."enabled", true) AS "enabled", u."sessionVersion" FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1',
     [id]
   );
-  return rows[0]?.enabled === true;
+  return rows[0] ?? null;
+}
+
+export async function getProfile(id: string) {
+  const rows = await client.unsafe<
+    {
+      email: string;
+      name: string | null;
+      password: string | null;
+      isAnonymous: boolean;
+    }[]
+  >(
+    'SELECT "email", "name", "password", "isAnonymous" FROM "User" WHERE "id" = $1',
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateProfile(
+  id: string,
+  name: string,
+  oldHash: string | null,
+  newHash: string | null
+) {
+  if (newHash) {
+    return (
+      (
+        await client.unsafe(
+          'UPDATE "User" SET "name" = $2, "password" = $3, "sessionVersion" = "sessionVersion" + 1, "updatedAt" = now() WHERE "id" = $1 AND "password" = $4 RETURNING "id"',
+          [id, name || null, newHash, oldHash]
+        )
+      ).length === 1
+    );
+  }
+  return (
+    (
+      await client.unsafe(
+        'UPDATE "User" SET "name" = $2, "updatedAt" = now() WHERE "id" = $1 RETURNING "id"',
+        [id, name || null]
+      )
+    ).length === 1
+  );
 }
 
 export async function reserveChatQuota(id: string): Promise<boolean> {
   const rows = await client.unsafe(RESERVE_QUOTA_SQL, [id]);
   return rows.length === 1;
+}
+
+export async function getPublishedAnnouncements() {
+  return await client.unsafe<{ id: string; title: string; body: string }[]>(
+    'SELECT "id", "title", "body" FROM "GraceAnnouncement" WHERE "enabled" = true ORDER BY "createdAt" DESC LIMIT 10'
+  );
+}
+
+export async function savePrivateAttachment(
+  userId: string,
+  name: string,
+  mediaType: string,
+  data: Buffer
+) {
+  return await client.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext('attachments:' || ${userId}))`;
+    const [usage] = await tx<
+      { size: number }[]
+    >`SELECT COALESCE(sum(octet_length("data")), 0)::int AS size FROM "GraceAttachment" WHERE "userId" = ${userId}`;
+    if (Number(usage.size) + data.length > 20 * 1024 * 1024) {
+      return null;
+    }
+    const [row] = await tx<
+      { id: string }[]
+    >`INSERT INTO "GraceAttachment" ("userId", "name", "mediaType", "data") VALUES (${userId}, ${name}, ${mediaType}, ${data}) RETURNING "id"`;
+    return row.id;
+  });
+}
+
+export async function getPrivateAttachment(userId: string, id: string) {
+  const rows = await client.unsafe<
+    { id: string; name: string; mediaType: string; data: Buffer }[]
+  >(
+    'SELECT "id", "name", "mediaType", "data" FROM "GraceAttachment" WHERE "id" = $1 AND "userId" = $2',
+    [id, userId]
+  );
+  return rows[0] ?? null;
 }
 
 export async function getUser(email: string): Promise<User[]> {
@@ -61,27 +142,40 @@ export async function getUser(email: string): Promise<User[]> {
   }
 }
 
-export async function createUser(email: string, password: string) {
+export async function createUser(
+  email: string,
+  password: string
+): Promise<boolean> {
   const hashedPassword = generateHashedPassword(password);
-
   try {
-    return await db.insert(user).values({ email, password: hashedPassword });
-  } catch (error) {
-    throw new ChatbotError("bad_request:database", {
-      cause: error,
+    return await client.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(lower(${email})))`;
+      const existing =
+        await tx`SELECT "id" FROM "User" WHERE lower("email") = lower(${email}) LIMIT 1`;
+      if (existing.length) {
+        return false;
+      }
+      await tx`INSERT INTO "User" ("email", "password") VALUES (${email}, ${hashedPassword})`;
+      return true;
     });
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
   }
 }
 
 export async function createGuestUser() {
-  const email = `guest-${Date.now()}`;
+  const email = `guest-${Date.now()}${randomInt(100_000, 999_999)}`;
   const password = generateHashedPassword(generateUUID());
 
   try {
-    return await db.insert(user).values({ email, password }).returning({
-      email: user.email,
-      id: user.id,
-    });
+    return await db
+      .insert(user)
+      .values({ email, isAnonymous: true, password })
+      .returning({
+        email: user.email,
+        id: user.id,
+        sessionVersion: user.sessionVersion,
+      });
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
@@ -666,6 +760,8 @@ export async function recordUsage({
   model,
   inputTokens,
   outputTokens,
+  provider,
+  upstreamModel,
 }: {
   callId: string;
   userId: string;
@@ -673,6 +769,8 @@ export async function recordUsage({
   model: string;
   inputTokens: number | undefined;
   outputTokens: number | undefined;
+  provider?: string | null;
+  upstreamModel?: string | null;
 }) {
   const valid = (value: number | undefined) =>
     Number.isSafeInteger(value) &&
@@ -682,7 +780,16 @@ export async function recordUsage({
       ? value
       : null;
   await client.unsafe(
-    'INSERT INTO "GraceUsageEvent" ("callId", "userId", "chatId", "model", "inputTokens", "outputTokens") VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT ("callId") DO NOTHING',
-    [callId, userId, chatId, model, valid(inputTokens), valid(outputTokens)]
+    'INSERT INTO "GraceUsageEvent" ("callId", "userId", "chatId", "model", "inputTokens", "outputTokens", "provider", "upstreamModel") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("callId") DO NOTHING',
+    [
+      callId,
+      userId,
+      chatId,
+      model,
+      valid(inputTokens),
+      valid(outputTokens),
+      provider ?? null,
+      upstreamModel ?? null,
+    ]
   );
 }

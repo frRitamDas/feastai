@@ -485,6 +485,7 @@ function PureMultimodalInput({
         )}
 
       <input
+        accept="image/jpeg,image/png,text/plain,.txt"
         className="pointer-events-none fixed -top-4 -left-4 size-0.5 opacity-0"
         multiple
         onChange={handleFileChange}
@@ -670,13 +671,16 @@ function PureAttachmentsButton({
     <Button
       className={cn(
         "h-7 w-7 rounded-lg border border-border/40 p-1 transition-colors",
-        hasVision
-          ? "text-foreground hover:border-border hover:text-foreground"
-          : "text-muted-foreground/30 cursor-not-allowed"
+        "text-foreground hover:border-border hover:text-foreground"
       )}
       data-testid="attachments-button"
-      disabled={status !== "ready" || !hasVision}
+      disabled={status !== "ready"}
       onClick={handleClick}
+      title={
+        hasVision
+          ? "Attach an image or text file"
+          : "Attach a text file; images require a vision model"
+      }
       variant="ghost"
     >
       <PaperclipIcon size={14} style={{ height: 14, width: 14 }} />

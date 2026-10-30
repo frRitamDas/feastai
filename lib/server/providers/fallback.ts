@@ -11,7 +11,11 @@ type Candidate = {
 /** Retry only a failed initial HTTP request, never after a stream is returned. */
 export function createFallbackModel(
   candidates: Candidate[],
-  request?: typeof fetch
+  request?: typeof fetch,
+  onSelected?: (selected: {
+    provider: DiscoveryProvider;
+    upstreamId: string;
+  }) => void
 ): LanguageModelV4 {
   if (!candidates.length || candidates.length > 3) {
     throw new Error("Invalid routing candidates");
@@ -32,13 +36,23 @@ export function createFallbackModel(
       (typeof error.statusCode === "number" && error.statusCode >= 500));
   return {
     async doGenerate(options) {
-      return await first.doGenerate(options);
+      const result = await first.doGenerate(options);
+      onSelected?.({
+        provider: candidates[0].provider,
+        upstreamId: candidates[0].upstreamId,
+      });
+      return result;
     },
     async doStream(options) {
       for (const [index, model] of models.entries()) {
         try {
           // biome-ignore lint/performance/noAwaitInLoops: Fallback must be sequential and only after a failed attempt.
-          return await model.doStream(options);
+          const stream = await model.doStream(options);
+          onSelected?.({
+            provider: candidates[index].provider,
+            upstreamId: candidates[index].upstreamId,
+          });
+          return stream;
         } catch (error) {
           if (
             index === models.length - 1 ||

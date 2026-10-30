@@ -44,11 +44,26 @@ export function encryptCredential(
 }
 
 export function decryptCredential(
-  envelope: EncryptedCredential,
+  value: EncryptedCredential | string,
   credentialId: string,
   encodedKey: string | undefined
 ): string {
-  if (envelope.version !== 1 || !credentialId) {
+  // Older server versions stored the JSON envelope as a JSONB string.
+  let envelope = value;
+  if (typeof envelope === "string") {
+    try {
+      envelope = JSON.parse(envelope) as EncryptedCredential;
+    } catch {
+      // biome-ignore lint/style/useErrorCause: JSON parser errors can include credential data.
+      throw new Error("Invalid credential envelope");
+    }
+  }
+  if (
+    !envelope ||
+    typeof envelope !== "object" ||
+    envelope.version !== 1 ||
+    !credentialId
+  ) {
     throw new Error("Unsupported credential envelope");
   }
   const iv = Buffer.from(envelope.iv, "base64");

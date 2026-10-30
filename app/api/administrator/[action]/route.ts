@@ -34,7 +34,9 @@ const bodySchema = z
       .string()
       .regex(/^[a-f0-9]{32}$/i)
       .optional(),
+    announcementId: uuid.optional(),
     baseUrl: z.url().max(512).optional(),
+    body: z.string().trim().min(1).max(2000).optional(),
     code: z
       .string()
       .regex(/^\d{6}$/)
@@ -63,6 +65,7 @@ const bodySchema = z
       .optional(),
     role: z.enum(["owner", "operator", "viewer"]).optional(),
     routeId: uuid.optional(),
+    title: z.string().trim().min(1).max(120).optional(),
     totpSecret: z.string().min(16).max(128).optional(),
     upstreamId: z.string().trim().min(1).max(300).optional(),
     userId: uuid.optional(),
@@ -85,8 +88,14 @@ export async function GET(_request: Request, context: Context) {
     const [usage] = await db.query(
       'SELECT count(*)::int AS "completedCalls", sum("inputTokens")::bigint AS "inputTokens", sum("outputTokens")::bigint AS "outputTokens", count(*) FILTER (WHERE "inputTokens" IS NULL OR "outputTokens" IS NULL)::int AS "incompleteReports" FROM "GraceUsageEvent"'
     );
+    const usageByModel = await db.query(
+      'SELECT "model", "provider", "upstreamModel", count(*)::int AS "completedCalls", sum("inputTokens")::bigint AS "inputTokens", sum("outputTokens")::bigint AS "outputTokens", count(*) FILTER (WHERE "inputTokens" IS NULL OR "outputTokens" IS NULL)::int AS "incompleteReports" FROM "GraceUsageEvent" WHERE "createdAt" >= now() - interval \'30 days\' GROUP BY "model", "provider", "upstreamModel" ORDER BY count(*) DESC LIMIT 50'
+    );
     const users = await db.query(
       'SELECT u."id", u."email", u."createdAt", u."isAnonymous", a."role" AS "adminRole", a."enabled" AS "adminEnabled", COALESCE(p."enabled", true) AS "accountEnabled", COALESCE(p."hourlyQuota", 10) AS "hourlyQuota", COALESCE(p."plan", \'free\') AS "plan" FROM "User" u LEFT JOIN "GraceAdministrator" a ON a."userId" = u."id" LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" ORDER BY u."createdAt" DESC LIMIT 100'
+    );
+    const announcements = await db.query(
+      'SELECT "id", "title", "body", "enabled", "createdAt" FROM "GraceAnnouncement" ORDER BY "createdAt" DESC LIMIT 100'
     );
     const logs = await db.query(
       'SELECT "id", "actorId", "action", "target", "outcome", "createdAt" FROM "GraceAdminAudit" ORDER BY "createdAt" DESC LIMIT 100'
@@ -103,6 +112,7 @@ export async function GET(_request: Request, context: Context) {
         ])
       : [[], [], []];
     return reply({
+      announcements,
       catalogConfigured,
       counts,
       keys,
@@ -111,6 +121,7 @@ export async function GET(_request: Request, context: Context) {
       role: admin.role,
       routes,
       usage,
+      usageByModel,
       users,
     });
   } catch {
@@ -204,6 +215,7 @@ export async function POST(request: Request, context: Context) {
     }
     await enforceIpRateLimit(admin.userId, "admin-action");
     const target =
+      data.announcementId ??
       data.userId ??
       data.keyId ??
       data.routeId ??
@@ -231,13 +243,18 @@ export async function POST(request: Request, context: Context) {
           `admin:${data.userId}`,
           process.env.GRACE_ENCRYPTION_KEY
         );
-        const rows = await getAdminDatabase().query(
-          `INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret")
-           SELECT u."id", $2, $3::jsonb FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1 AND u."isAnonymous" = false AND COALESCE(p."enabled", true)
+        const rows = await getAdminDatabase().transaction(async (tx) => {
+          await tx.query('SELECT "id" FROM "User" WHERE "id" = $1 FOR UPDATE', [
+            data.userId,
+          ]);
+          return tx.query(
+            `INSERT INTO "GraceAdministrator" ("userId", "role", "totpSecret")
+           SELECT u."id", $2, $3::text::jsonb FROM "User" u LEFT JOIN "GraceUserPolicy" p ON p."userId" = u."id" WHERE u."id" = $1 AND u."isAnonymous" = false AND COALESCE(p."enabled", true)
            ON CONFLICT ("userId") DO UPDATE SET "role" = EXCLUDED."role", "totpSecret" = EXCLUDED."totpSecret", "enabled" = true, "lastTotpStep" = -1, "updatedAt" = now()
            RETURNING "userId"`,
-          [data.userId, data.role, JSON.stringify(encrypted)]
-        );
+            [data.userId, data.role, JSON.stringify(encrypted)]
+          );
+        });
         if (!rows.length) {
           return reply({ error: "Account not found" }, 404);
         }
@@ -268,15 +285,27 @@ export async function POST(request: Request, context: Context) {
       ) {
         return reply({ error: "Invalid request" }, 400);
       }
-      const rows = await getAdminDatabase().query(
-        `INSERT INTO "GraceUserPolicy" ("userId", "enabled", "hourlyQuota", "plan")
+      const rows = await getAdminDatabase().transaction(async (tx) => {
+        await tx.query('SELECT "id" FROM "User" WHERE "id" = $1 FOR UPDATE', [
+          data.userId,
+        ]);
+        const updated = await tx.query(
+          `INSERT INTO "GraceUserPolicy" ("userId", "enabled", "hourlyQuota", "plan")
          SELECT u."id", $2, $3, $4 FROM "User" u
          WHERE u."id" = $1 AND NOT EXISTS
            (SELECT 1 FROM "GraceAdministrator" a WHERE a."userId" = u."id" AND a."enabled" = true)
          ON CONFLICT ("userId") DO UPDATE SET "enabled" = EXCLUDED."enabled", "hourlyQuota" = EXCLUDED."hourlyQuota", "plan" = EXCLUDED."plan", "updatedAt" = now()
          RETURNING "userId"`,
-        [data.userId, data.enabled, data.hourlyQuota, data.plan]
-      );
+          [data.userId, data.enabled, data.hourlyQuota, data.plan]
+        );
+        if (updated.length && !data.enabled) {
+          await tx.query(
+            'UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = $1',
+            [data.userId]
+          );
+        }
+        return updated;
+      });
       if (!rows.length) {
         return reply(
           { error: "Account not found or is an active administrator" },
@@ -284,6 +313,31 @@ export async function POST(request: Request, context: Context) {
         );
       }
       await audit(admin.userId, action, data.userId, "success");
+      return reply({ ok: true });
+    }
+    if (action === "create-announcement") {
+      if (!(data.title && data.body)) {
+        return reply({ error: "Invalid request" }, 400);
+      }
+      const [created] = await getAdminDatabase().query<{ id: string }>(
+        'INSERT INTO "GraceAnnouncement" ("title", "body") VALUES ($1, $2) RETURNING "id"',
+        [data.title, data.body]
+      );
+      await audit(admin.userId, action, created.id, "success");
+      return reply({ id: created.id });
+    }
+    if (action === "set-announcement") {
+      if (!data.announcementId || data.enabled === undefined) {
+        return reply({ error: "Invalid request" }, 400);
+      }
+      const rows = await getAdminDatabase().query(
+        'UPDATE "GraceAnnouncement" SET "enabled" = $2, "updatedAt" = now() WHERE "id" = $1 RETURNING "id"',
+        [data.announcementId, data.enabled]
+      );
+      if (!rows.length) {
+        return reply({ error: "Announcement not found" }, 404);
+      }
+      await audit(admin.userId, action, data.announcementId, "success");
       return reply({ ok: true });
     }
     const store = getAdminCatalog();

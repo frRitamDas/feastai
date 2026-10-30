@@ -2,6 +2,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  customType,
   foreignKey,
   index,
   integer,
@@ -25,6 +26,7 @@ export const user = pgTable("User", {
   isAnonymous: boolean("isAnonymous").notNull().default(false),
   name: text("name"),
   password: varchar("password", { length: 64 }),
+  sessionVersion: integer("sessionVersion").notNull().default(0),
   updatedAt: timestamp("updatedAt").notNull().defaultNow(),
 });
 
@@ -49,6 +51,35 @@ export const graceQuotaCounter = pgTable("GraceQuotaCounter", {
   windowStart: timestamp("windowStart", { withTimezone: true })
     .notNull()
     .defaultNow(),
+});
+
+export const graceAnnouncement = pgTable("GraceAnnouncement", {
+  body: text("body").notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  enabled: boolean("enabled").notNull().default(false),
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  title: varchar("title", { length: 120 }).notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+export const graceAttachment = pgTable("GraceAttachment", {
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  data: bytea("data").notNull(),
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  mediaType: varchar("mediaType", { length: 32 }).notNull(),
+  name: varchar("name", { length: 100 }).notNull(),
+  userId: uuid("userId")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
 });
 
 export const chat = pgTable("Chat", {
@@ -298,6 +329,8 @@ export const graceUsageEvent = pgTable(
     inputTokens: integer("inputTokens"),
     model: varchar("model", { length: 300 }).notNull(),
     outputTokens: integer("outputTokens"),
+    provider: varchar("provider", { length: 32 }),
+    upstreamModel: varchar("upstreamModel", { length: 300 }),
     userId: uuid("userId")
       .notNull()
       .references(() => user.id),

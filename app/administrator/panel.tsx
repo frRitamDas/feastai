@@ -30,6 +30,13 @@ type Model = {
   lastLatencyMs: number | null;
 };
 type Overview = {
+  announcements: {
+    id: string;
+    title: string;
+    body: string;
+    enabled: boolean;
+    createdAt: string;
+  }[];
   role: "owner" | "operator" | "viewer";
   catalogConfigured: boolean;
   counts: { users: number; chats: number; messages: number };
@@ -39,6 +46,15 @@ type Overview = {
     outputTokens: string | number | null;
     incompleteReports: number;
   };
+  usageByModel: {
+    model: string;
+    provider: string | null;
+    upstreamModel: string | null;
+    completedCalls: number;
+    inputTokens: string | number | null;
+    outputTokens: string | number | null;
+    incompleteReports: number;
+  }[];
   keys: Key[];
   models: Model[];
   routes: {
@@ -74,6 +90,7 @@ const sections = [
   "Providers & keys",
   "Models & routing",
   "Users",
+  "Announcements",
   "Audit log",
 ] as const;
 
@@ -100,6 +117,8 @@ export function AdminConsole({ verified }: { verified: boolean }) {
   const [adminUserId, setAdminUserId] = useState("");
   const [adminRole, setAdminRole] = useState("viewer");
   const [adminTotp, setAdminTotp] = useState("");
+  const [announcementTitle, setAnnouncementTitle] = useState("");
+  const [announcementBody, setAnnouncementBody] = useState("");
   const [policyUser, setPolicyUser] = useState("");
   const [policyQuota, setPolicyQuota] = useState("10");
   const [policyPlan, setPolicyPlan] = useState("free");
@@ -268,6 +287,34 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     token counts. Failed or interrupted calls may not be
                     represented.
                   </p>
+                </section>
+                <section className="rounded-2xl border p-5">
+                  <h2 className="font-semibold">
+                    Usage by model · last 30 days
+                  </h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Provider is shown only when Grace selected it directly.
+                    Unknown token counts remain unreported.
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    {data.usageByModel.map((item) => (
+                      <div
+                        className="border-b pb-3 text-sm"
+                        key={`${item.model}-${item.provider ?? "unknown"}-${item.upstreamModel ?? "unknown"}`}
+                      >
+                        <strong>
+                          {item.provider ?? "Gateway / unknown"} ·{" "}
+                          {item.upstreamModel ?? item.model}
+                        </strong>
+                        <p className="text-muted-foreground">
+                          {item.completedCalls} completed ·{" "}
+                          {item.inputTokens ?? "not reported"} input ·{" "}
+                          {item.outputTokens ?? "not reported"} output ·{" "}
+                          {item.incompleteReports} incomplete reports
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </section>
               </div>
             )}
@@ -712,6 +759,88 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+            {section === "Announcements" && (
+              <div className="space-y-5">
+                <div>
+                  <h2 className="font-semibold">Announcements</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Publish plain-text messages to signed-in users. New
+                    announcements start disabled.
+                  </p>
+                </div>
+                {data.role !== "viewer" && (
+                  <form
+                    className="grid gap-3 rounded-2xl border p-5"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (
+                        await action("create-announcement", {
+                          body: announcementBody,
+                          title: announcementTitle,
+                        })
+                      ) {
+                        setAnnouncementTitle("");
+                        setAnnouncementBody("");
+                      }
+                    }}
+                  >
+                    <Input
+                      aria-label="Announcement title"
+                      maxLength={120}
+                      onChange={(event) =>
+                        setAnnouncementTitle(event.target.value)
+                      }
+                      placeholder="Title"
+                      required
+                      value={announcementTitle}
+                    />
+                    <textarea
+                      aria-label="Announcement message"
+                      className="min-h-24 rounded-lg border bg-background p-3 text-sm"
+                      maxLength={2000}
+                      onChange={(event) =>
+                        setAnnouncementBody(event.target.value)
+                      }
+                      placeholder="Message"
+                      required
+                      value={announcementBody}
+                    />
+                    <Button disabled={busy} type="submit">
+                      Create announcement
+                    </Button>
+                  </form>
+                )}
+                {data.announcements.map((item) => (
+                  <div className="rounded-2xl border p-4" key={item.id}>
+                    <div className="flex items-center justify-between gap-3">
+                      <strong>{item.title}</strong>
+                      <span className="text-xs text-muted-foreground">
+                        {item.enabled ? "Published" : "Draft"}
+                      </span>
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm">
+                      {item.body}
+                    </p>
+                    {data.role !== "viewer" && (
+                      <Button
+                        className="mt-3"
+                        disabled={busy}
+                        onClick={() =>
+                          action("set-announcement", {
+                            announcementId: item.id,
+                            enabled: !item.enabled,
+                          })
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        {item.enabled ? "Unpublish" : "Publish"}
+                      </Button>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
             {section === "Users" && (

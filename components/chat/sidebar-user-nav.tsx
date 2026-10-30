@@ -1,3 +1,4 @@
+// biome-ignore-all lint/performance/noJsxPropsBind: Event handlers use the current form state.
 "use client";
 
 import { ChevronUp } from "lucide-react";
@@ -5,7 +6,7 @@ import { useRouter } from "next/navigation";
 import type { User } from "next-auth";
 import { signOut, useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { guestRegex } from "@/lib/constants";
 import { LoaderIcon } from "./icons";
+import { ProfileSettings } from "./profile-settings";
 import { toast } from "./toast";
 
 function emailToHue(email: string): number {
@@ -32,6 +34,7 @@ function emailToHue(email: string): number {
 
 export function SidebarUserNav({ user }: { user: User }) {
   const router = useRouter();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { data, status } = useSession();
   const { setTheme, resolvedTheme } = useTheme();
 
@@ -106,6 +109,11 @@ export function SidebarUserNav({ user }: { user: User }) {
             >
               {`Toggle ${resolvedTheme === "light" ? "dark" : "light"} mode`}
             </DropdownMenuItem>
+            {!isGuest && (
+              <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                Account settings
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild data-testid="user-nav-item-auth">
               <button
@@ -118,6 +126,9 @@ export function SidebarUserNav({ user }: { user: User }) {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {!isGuest && (
+          <ProfileSettings onOpenChange={setSettingsOpen} open={settingsOpen} />
+        )}
       </SidebarMenuItem>
     </SidebarMenu>
   );

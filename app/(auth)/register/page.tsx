@@ -1,9 +1,10 @@
 "use client";
 
+import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { AuthForm } from "@/components/chat/auth-form";
 import { SubmitButton } from "@/components/chat/submit-button";
 import { toast } from "@/components/chat/toast";
@@ -11,6 +12,7 @@ import { type RegisterActionState, register } from "../actions";
 
 export default function Page() {
   const router = useRouter();
+  const challengeRef = useRef<TurnstileInstance>(null);
   const [email, setEmail] = useState("");
   const [isSuccessful, setIsSuccessful] = useState(false);
 
@@ -23,6 +25,13 @@ export default function Page() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {
+    if (
+      state.status === "user_exists" ||
+      state.status === "failed" ||
+      state.status === "invalid_data"
+    ) {
+      challengeRef.current?.reset();
+    }
     if (state.status === "user_exists") {
       toast({ description: "Account already exists!", type: "error" });
     } else if (state.status === "failed") {
@@ -38,7 +47,7 @@ export default function Page() {
       updateSession();
       router.refresh();
     }
-  }, [state.status]);
+  }, [state]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get("email") as string);
@@ -50,6 +59,17 @@ export default function Page() {
       <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
       <p className="text-sm text-muted-foreground">Get started for free</p>
       <AuthForm action={handleSubmit} defaultEmail={email}>
+        {process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY ? (
+          <Turnstile
+            options={{ action: "register" }}
+            ref={challengeRef}
+            siteKey={process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY}
+          />
+        ) : process.env.NODE_ENV === "production" ? (
+          <p className="text-sm text-destructive">
+            Registration verification is unavailable.
+          </p>
+        ) : null}
         <SubmitButton isSuccessful={isSuccessful}>Sign up</SubmitButton>
         <p className="text-center text-[13px] text-muted-foreground">
           {"Have an account? "}
