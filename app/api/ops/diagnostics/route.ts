@@ -1,8 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { ipAddress } from "@vercel/functions";
 import postgres from "postgres";
-import { resolveDatabaseUrl } from "@/lib/db/connection-url";
-import { SUPABASE_ROOT_CA_2021 } from "@/lib/db/supabase-ca";
+import {
+  resolveDatabaseUrl,
+  supabasePoolerOptions,
+} from "@/lib/db/connection-url";
 
 async function probe(
   url: string,
@@ -18,7 +20,7 @@ async function probe(
       max: 1,
       prepare,
       ...(useSupabaseCa
-        ? { ssl: { ca: SUPABASE_ROOT_CA_2021, rejectUnauthorized: true } }
+        ? supabasePoolerOptions(url)
         : forceTls
           ? { ssl: "require" as const }
           : {}),
@@ -88,24 +90,26 @@ export async function GET(request: Request) {
           url,
           process.env.GRACE_SUPABASE_POOLER_HOST
         );
-        const verified = new URL(effective);
-        verified.searchParams.set("sslmode", "verify-full");
+        const verifiedSession = new URL(effective);
+        verifiedSession.port = "5432";
+        verifiedSession.searchParams.set("sslmode", "verify-full");
         const transaction = new URL(effective);
         transaction.port = "6543";
+        transaction.searchParams.set("sslmode", "require");
         const verifiedTransaction = new URL(transaction);
         verifiedTransaction.searchParams.set("sslmode", "verify-full");
         database = {
           ...database,
-          effectiveConnection: await probe(effective),
+          effectiveConnection: await probe(effective, false, true, true),
           ...(searchParams.get("verify_tls") === "1"
             ? {
                 sessionPinned: await probe(
-                  verified.toString(),
+                  verifiedSession.toString(),
                   false,
                   true,
                   true
                 ),
-                sessionVerified: await probe(verified.toString()),
+                sessionVerified: await probe(verifiedSession.toString()),
                 transactionConnection: await probe(
                   transaction.toString(),
                   false,

@@ -28,7 +28,7 @@ import {
 import { RESERVE_QUOTA_SQL } from "../server/security/quota";
 import { RATE_LIMIT_SQL } from "../server/security/rate-limit";
 import { generateUUID } from "../utils";
-import { resolveDatabaseUrl } from "./connection-url";
+import { resolveDatabaseUrl, supabasePoolerOptions } from "./connection-url";
 import {
   type Chat,
   chat,
@@ -44,13 +44,16 @@ import {
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
-const client = postgres(
-  resolveDatabaseUrl(
-    process.env.POSTGRES_URL ?? "",
-    process.env.GRACE_SUPABASE_POOLER_HOST
-  ),
-  { connect_timeout: 10, idle_timeout: 5, max: 1 }
+const databaseUrl = resolveDatabaseUrl(
+  process.env.POSTGRES_URL ?? "",
+  process.env.GRACE_SUPABASE_POOLER_HOST
 );
+const client = postgres(databaseUrl, {
+  connect_timeout: 10,
+  idle_timeout: 5,
+  max: 1,
+  ...supabasePoolerOptions(databaseUrl),
+});
 const db = drizzle(client);
 
 export async function getUserSessionState(id: string) {

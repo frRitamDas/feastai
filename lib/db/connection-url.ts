@@ -1,5 +1,10 @@
+import { SUPABASE_ROOT_CA_2021 } from "./supabase-ca";
+
+const SUPABASE_POOLER_HOST =
+  /^aws-[0-9]+-[a-z]{2}-[a-z]+-[0-9]+\.pooler\.supabase\.com$/;
+
 /**
- * Optionally route a direct Supabase Postgres URL through its session pooler.
+ * Optionally route a direct Supabase Postgres URL through its transaction pooler.
  * This preserves credentials without exposing or copying them. The pooler host
  * is restricted to Supabase's AWS pooler domain, so a typo cannot send the
  * database password to an arbitrary host. A pooled URL remains unchanged.
@@ -8,11 +13,7 @@ export function resolveDatabaseUrl(url: string, poolerHost?: string): string {
   if (!poolerHost) {
     return url;
   }
-  if (
-    !/^aws-[0-9]+-[a-z]{2}-[a-z]+-[0-9]+\.pooler\.supabase\.com$/.test(
-      poolerHost
-    )
-  ) {
+  if (!SUPABASE_POOLER_HOST.test(poolerHost)) {
     throw new Error("Invalid Supabase pooler host");
   }
   let connection: URL;
@@ -33,9 +34,34 @@ export function resolveDatabaseUrl(url: string, poolerHost?: string): string {
     throw new Error("Expected a direct Supabase PostgreSQL URL");
   }
   connection.hostname = poolerHost;
-  connection.port = "5432"; // Session pooling supports prepared statements.
+  connection.port = "6543"; // Transaction pooling is suited to serverless.
   connection.username = `${decodeURIComponent(connection.username)}.${direct[1]}`;
-  // The certificate-verified mode is probed separately before it is enabled.
-  connection.searchParams.set("sslmode", "require");
+  connection.searchParams.set("sslmode", "verify-full");
   return connection.toString();
+}
+
+/** Pooler connections authenticate the host with Supabase's public root CA.
+ * Explicit options override SSL flags in the URL in postgres.js. Named prepared
+ * statements and pipelining are incompatible with transaction pooling. */
+export function supabasePoolerOptions(url: string): {
+  max_pipeline?: number;
+  prepare?: boolean;
+  ssl?: { ca: string; rejectUnauthorized: true };
+} {
+  let connection: URL;
+  try {
+    connection = new URL(url);
+  } catch {
+    return {};
+  }
+  if (
+    !["postgres:", "postgresql:"].includes(connection.protocol) ||
+    !SUPABASE_POOLER_HOST.test(connection.hostname)
+  ) {
+    return {};
+  }
+  return {
+    ...(connection.port === "6543" ? { max_pipeline: 1, prepare: false } : {}),
+    ssl: { ca: SUPABASE_ROOT_CA_2021, rejectUnauthorized: true },
+  };
 }

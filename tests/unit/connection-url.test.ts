@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { X509Certificate } from "node:crypto";
 import { test } from "node:test";
-import { resolveDatabaseUrl } from "../../lib/db/connection-url";
+import postgres from "postgres";
+import {
+  resolveDatabaseUrl,
+  supabasePoolerOptions,
+} from "../../lib/db/connection-url";
 import { SUPABASE_ROOT_CA_2021 } from "../../lib/db/supabase-ca";
 
 const direct =
@@ -26,17 +30,40 @@ test("keeps direct and local URLs unchanged when no pooler is configured", () =>
   );
 });
 
-test("builds a Supabase session-pooler URL without altering credentials", () => {
+test("builds a Supabase transaction-pooler URL without altering credentials", () => {
   const result = new URL(resolveDatabaseUrl(direct, pooler));
   assert.equal(result.hostname, pooler);
-  assert.equal(result.port, "5432");
+  assert.equal(result.port, "6543");
   assert.equal(result.username, "postgres.abcdefghijklmnopqrst");
   assert.equal(result.password, "example%40secret");
   assert.equal(result.searchParams.get("application_name"), "grace");
-  assert.equal(result.searchParams.get("sslmode"), "require");
+  assert.equal(result.searchParams.get("sslmode"), "verify-full");
   assert.equal(
     resolveDatabaseUrl(result.toString(), pooler),
     result.toString()
+  );
+});
+
+test("pooler options pin the CA and disable unsafe transaction features", async () => {
+  const url = resolveDatabaseUrl(direct, pooler);
+  const options = supabasePoolerOptions(url);
+  const client = postgres(`${url}&sslmode=require`, options);
+  assert.equal(client.options.prepare, false);
+  assert.equal(Reflect.get(client.options, "max_pipeline"), 1);
+  assert.deepEqual(client.options.ssl, {
+    ca: SUPABASE_ROOT_CA_2021,
+    rejectUnauthorized: true,
+  });
+  await client.end();
+
+  const sessionUrl = url.replace(":6543/", ":5432/");
+  const sessionOptions = supabasePoolerOptions(sessionUrl);
+  assert.equal(sessionOptions.prepare, undefined);
+  assert.equal(sessionOptions.ssl?.rejectUnauthorized, true);
+  assert.deepEqual(supabasePoolerOptions("postgres://localhost/db"), {});
+  assert.deepEqual(
+    supabasePoolerOptions(`postgres://${pooler}.attacker.example/db`),
+    {}
   );
 });
 

@@ -1,5 +1,8 @@
 import postgres from "postgres";
-import { resolveDatabaseUrl } from "@/lib/db/connection-url";
+import {
+  resolveDatabaseUrl,
+  supabasePoolerOptions,
+} from "@/lib/db/connection-url";
 import type { CatalogDatabase } from "./store";
 
 /** A server-only adapter. Never construct this using a browser-supplied URL. */
@@ -7,10 +10,16 @@ export function createCatalogDatabase(url: string) {
   if (!url) {
     throw new Error("POSTGRES_URL is required");
   }
-  const connection = postgres(
-    resolveDatabaseUrl(url, process.env.GRACE_SUPABASE_POOLER_HOST),
-    { connect_timeout: 10, idle_timeout: 5, max: 1 }
+  const databaseUrl = resolveDatabaseUrl(
+    url,
+    process.env.GRACE_SUPABASE_POOLER_HOST
   );
+  const connection = postgres(databaseUrl, {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    ...supabasePoolerOptions(databaseUrl),
+  });
   function wrap(sql: postgres.Sql | postgres.TransactionSql): CatalogDatabase {
     return {
       query: async <T extends Record<string, unknown>>(
