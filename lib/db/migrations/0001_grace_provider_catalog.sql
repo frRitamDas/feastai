@@ -30,6 +30,8 @@ CREATE TABLE "GraceKeyModel" (
   "modelId" uuid NOT NULL,
   "provider" varchar(32) NOT NULL,
   "permitted" boolean NOT NULL DEFAULT false,
+  "available" boolean NOT NULL DEFAULT false,
+  "verifiedAt" timestamptz,
   "lastDiscoveredAt" timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("keyId", "modelId"),
   FOREIGN KEY ("keyId", "provider") REFERENCES "GraceProviderKey" ("id", "provider") ON DELETE CASCADE,

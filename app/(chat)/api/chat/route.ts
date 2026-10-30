@@ -41,6 +41,8 @@ import {
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import { checkIpRateLimit } from "@/lib/ratelimit";
+import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
+import { createProviderModel } from "@/lib/server/providers/inference";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -93,15 +95,38 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    if (!allowedModelIds.has(selectedChatModel)) {
+    await checkIpRateLimit(ipAddress(request));
+    let sharedModel: Awaited<
+      ReturnType<NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolve"]>
+    > = null;
+    if (selectedChatModel.startsWith("grace/")) {
+      const catalog = getRuntimeCatalog();
+      const modelId = selectedChatModel.slice("grace/".length);
+      if (
+        !catalog ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          modelId
+        )
+      ) {
+        return new ChatbotError(
+          "bad_request:api",
+          "The selected model is unavailable."
+        ).toResponse();
+      }
+      sharedModel = await catalog.resolve(modelId);
+      if (!sharedModel) {
+        return new ChatbotError(
+          "bad_request:api",
+          "The selected model is unavailable."
+        ).toResponse();
+      }
+    } else if (!allowedModelIds.has(selectedChatModel)) {
       return new ChatbotError(
         "bad_request:api",
-        "The selected model is unavailable. Choose another model and try again."
+        "The selected model is unavailable."
       ).toResponse();
     }
     const chatModel = selectedChatModel;
-
-    await checkIpRateLimit(ipAddress(request));
 
     const userType: UserType = session.user.type;
 
@@ -171,6 +196,24 @@ export async function POST(request: Request) {
         ...convertToUIMessages(messagesFromDb),
         message as ChatMessage,
       ];
+    }
+
+    if (
+      sharedModel &&
+      (isToolApprovalFlow ||
+        uiMessages.some((item) =>
+          item.parts.some(
+            (part) =>
+              part.type === "file" ||
+              part.type === "dynamic-tool" ||
+              part.type.startsWith("tool-")
+          )
+        ))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "This model currently supports text-only conversations without tools."
+      ).toResponse();
     }
 
     const { longitude, latitude, city, country } = geolocation(request);
@@ -271,7 +314,7 @@ export async function POST(request: Request) {
 
         const result = streamText({
           activeTools:
-            isReasoningModel && !supportsTools
+            sharedModel || (isReasoningModel && !supportsTools)
               ? []
               : [
                   "getWeather",
@@ -282,7 +325,22 @@ export async function POST(request: Request) {
                 ],
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
-          model: getLanguageModel(chatModel),
+          model: sharedModel
+            ? createProviderModel(
+                sharedModel.provider,
+                sharedModel.upstreamId,
+                sharedModel.credential
+              )
+            : getLanguageModel(chatModel),
+          ...(sharedModel
+            ? {
+                abortSignal: AbortSignal.any([
+                  request.signal,
+                  AbortSignal.timeout(55_000),
+                ]),
+                maxRetries: 0,
+              }
+            : {}),
           onAbort() {
             stopWaitingStatus();
           },

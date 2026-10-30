@@ -17,9 +17,11 @@
     "db:check": "drizzle-kit check",
     "db:up": "drizzle-kit up",
     "test": "PLAYWRIGHT=True playwright test",
-    "test:unit": "tsx --test tests/unit/*.test.ts"
+    "test:unit": "tsx --test tests/unit/*.test.ts",
+    "catalog": "tsx scripts/catalog.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.5",
     "@ai-sdk/otel": "^1.0.15",
     "@ai-sdk/provider": "^4.0.2",
     "@ai-sdk/react": "4.0.16",

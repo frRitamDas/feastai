@@ -185,6 +185,7 @@ export const graceModel = pgTable(
 export const graceKeyModel = pgTable(
   "GraceKeyModel",
   {
+    available: boolean("available").notNull().default(false),
     keyId: uuid("keyId").notNull(),
     lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
       .notNull()
@@ -192,6 +193,7 @@ export const graceKeyModel = pgTable(
     modelId: uuid("modelId").notNull(),
     permitted: boolean("permitted").notNull().default(false),
     provider: varchar("provider", { length: 32 }).notNull(),
+    verifiedAt: timestamp("verifiedAt", { withTimezone: true }),
   },
   (table) => ({
     keyRef: foreignKey({
