@@ -22,5 +22,18 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL(`${base}/`, request.url));
   }
 
-  return signIn("guest", { redirect: true, redirectTo: redirectUrl });
+  try {
+    // Use an explicit response so a guest provisioning failure can degrade
+    // gracefully instead of turning every entry point into a blank HTTP 500.
+    const destination = await signIn("guest", {
+      redirect: false,
+      redirectTo: redirectUrl,
+    });
+    return NextResponse.redirect(new URL(destination, request.url));
+  } catch {
+    const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    return NextResponse.redirect(
+      new URL(`${base}/login?guest=unavailable`, request.url)
+    );
+  }
 }

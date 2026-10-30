@@ -98,6 +98,32 @@ async function main() {
       await delay(1000);
     }
     assert.ok(csrfResponse?.ok, `Server did not start: ${logs}`);
+    for (const path of ["/login", "/register"]) {
+      // These must be reachable without first provisioning a guest session.
+      const response = await fetch(`${base}${path}`, { redirect: "manual" });
+      assert.equal(response.status, 200, `${path}: ${logs}`);
+    }
+    const beforeGuest = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM "User" WHERE "isAnonymous" = true'
+    );
+    assert.equal(beforeGuest.rows[0].count, 0);
+    const guestResponse = await fetch(
+      `${base}/api/auth/guest?redirectUrl=%2F`,
+      {
+        redirect: "manual",
+      }
+    );
+    assert.equal(guestResponse.status, 307, `Guest sign-in: ${logs}`);
+    assert.ok(
+      guestResponse.headers
+        .getSetCookie()
+        .some((cookie) => cookie.startsWith("authjs.session-token=")),
+      `Guest sign-in did not issue a session: ${logs}`
+    );
+    const guestUsers = await db.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM "User" WHERE "isAnonymous" = true'
+    );
+    assert.equal(guestUsers.rows[0].count, 1);
     const csrf = await csrfResponse.json();
     const initialCookies = csrfResponse.headers
       .getSetCookie()

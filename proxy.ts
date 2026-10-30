@@ -31,6 +31,16 @@ export async function proxy(request: NextRequest) {
   });
 
   const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  const isAuthPage = ["/login", "/register"].includes(pathname);
+
+  // Account access must remain reachable even if guest provisioning is down.
+  if (isAuthPage) {
+    const isGuest = guestRegex.test(token?.email ?? "");
+    if (token && !isGuest) {
+      return NextResponse.redirect(new URL(`${base}/`, request.url));
+    }
+    return NextResponse.next();
+  }
 
   if (!token) {
     const redirectUrl = encodeURIComponent(new URL(request.url).pathname);
@@ -38,12 +48,6 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(
       new URL(`${base}/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
     );
-  }
-
-  const isGuest = guestRegex.test(token?.email ?? "");
-
-  if (token && !isGuest && ["/login", "/register"].includes(pathname)) {
-    return NextResponse.redirect(new URL(`${base}/`, request.url));
   }
 
   return NextResponse.next();

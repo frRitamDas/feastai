@@ -14,6 +14,13 @@ export default function Page() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [isSuccessful, setIsSuccessful] = useState(false);
+  const [guestUnavailable, setGuestUnavailable] = useState(false);
+
+  useEffect(() => {
+    setGuestUnavailable(
+      new URLSearchParams(window.location.search).get("guest") === "unavailable"
+    );
+  }, []);
 
   const [state, formAction] = useActionState<LoginActionState, FormData>(
     login,
@@ -49,6 +56,12 @@ export default function Page() {
       <p className="text-sm text-muted-foreground">
         Sign in to your account to continue
       </p>
+      {Boolean(guestUnavailable) && (
+        <p className="text-sm text-destructive" role="alert">
+          Guest access is temporarily unavailable. Please sign in or try again
+          later.
+        </p>
+      )}
       <AuthForm action={handleSubmit} defaultEmail={email}>
         <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
         <p className="text-center text-[13px] text-muted-foreground">
