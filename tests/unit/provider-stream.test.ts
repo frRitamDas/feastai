@@ -65,3 +65,40 @@ test("compatible provider streams the selected upstream model using a server-sid
   assert.equal(body?.model, "selected-model");
   assert.equal(body?.stream, true);
 });
+
+test("Gemini streams through Google's fixed OpenAI-compatible endpoint", async () => {
+  const mock: typeof fetch = (url, options) => {
+    assert.equal(
+      String(url),
+      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    );
+    assert.equal(
+      new Headers(options?.headers).get("authorization"),
+      "Bearer mock-google-key"
+    );
+    assert.equal(options?.redirect, "error");
+    const body = JSON.parse(String(options?.body));
+    assert.equal(body.model, "gemini-test");
+    return Promise.resolve(
+      new Response(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "Hello", role: "assistant" }, finish_reason: null, index: 0 }], id: "1" })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop", index: 0 }], id: "1" })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } }
+      )
+    );
+  };
+  const stream = streamText({
+    maxRetries: 0,
+    model: createProviderModel(
+      "gemini",
+      "gemini-test",
+      "mock-google-key",
+      mock
+    ),
+    prompt: "Hi",
+  });
+  let result = "";
+  for await (const chunk of stream.textStream) {
+    result += chunk;
+  }
+  assert.equal(result, "Hello");
+});

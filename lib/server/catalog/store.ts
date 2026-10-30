@@ -23,6 +23,7 @@ export interface CatalogDatabase {
 
 const PROVIDERS = new Set([
   "groq",
+  "gemini",
   "openrouter",
   "cerebras",
   "sambanova",

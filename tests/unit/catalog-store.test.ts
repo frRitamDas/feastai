@@ -32,6 +32,9 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
         "utf8"
       )
     );
+    await db.exec(
+      await readFile("lib/db/migrations/0004_grace_gemini_provider.sql", "utf8")
+    );
     const store = new CatalogStore(
       adapter(db),
       randomBytes(32).toString("base64")
@@ -108,6 +111,29 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
     );
     assert.deepEqual(await store.listPublicModels(), []);
     await assert.rejects(store.setPermission(key, model, true));
+    const gemini = await store.addKey({
+      credential: "example-google-key",
+      label: "Google",
+      provider: "gemini",
+    });
+    const geminiResult = await store.discover(gemini, () =>
+      Promise.resolve(
+        Response.json({
+          models: [
+            {
+              name: "models/gemini-test",
+              supportedGenerationMethods: ["generateContent"],
+            },
+          ],
+        })
+      )
+    );
+    assert.equal(geminiResult.status, "discovered");
+    assert.equal(
+      (await db.query('SELECT * FROM "GraceProviderKey"')).rows.length,
+      2
+    );
+    await store.deleteKey(gemini);
     await store.deleteKey(key);
     assert.equal(
       (await db.query('SELECT * FROM "GraceKeyModel"')).rows.length,

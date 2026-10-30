@@ -89,3 +89,65 @@ test("retry-after is bounded and handles dates", () => {
   assert.equal(parseRetryAfter("Thu, 01 Jan 1970 00:01:00 GMT", 0), 60);
   assert.equal(parseRetryAfter("not valid"), undefined);
 });
+
+test("Gemini discovery follows bounded pages without exposing credentials or embedding models", async () => {
+  const calls: string[] = [];
+  const mock: typeof fetch = (url, init) => {
+    calls.push(String(url));
+    assert.equal(
+      new Headers(init?.headers).get("x-goog-api-key"),
+      "google-secret"
+    );
+    assert.equal(init?.redirect, "error");
+    if (calls.length === 1) {
+      return Promise.resolve(
+        Response.json({
+          models: [
+            {
+              displayName: "Gemini Test",
+              name: "models/gemini-test",
+              supportedGenerationMethods: ["generateContent"],
+            },
+            {
+              name: "models/embed",
+              supportedGenerationMethods: ["embedContent"],
+            },
+          ],
+          nextPageToken: "token-2",
+        })
+      );
+    }
+    return Promise.resolve(
+      Response.json({
+        models: [
+          {
+            name: "models/gemini-next",
+            supportedGenerationMethods: ["generateContent"],
+          },
+        ],
+      })
+    );
+  };
+  assert.deepEqual(await discoverModels("gemini", "google-secret", mock), {
+    models: [
+      { id: "gemini-test", name: "Gemini Test" },
+      { id: "gemini-next", name: "gemini-next" },
+    ],
+    status: "discovered",
+  });
+  assert.ok(
+    calls[0].startsWith(
+      "https://generativelanguage.googleapis.com/v1beta/models?"
+    )
+  );
+  assert.equal(new URL(calls[1]).searchParams.get("pageToken"), "token-2");
+  assert.equal(
+    calls.some((url) => url.includes("google-secret")),
+    false
+  );
+  const repeated: typeof fetch = () =>
+    Promise.resolve(Response.json({ models: [], nextPageToken: "same" }));
+  assert.deepEqual(await discoverModels("gemini", "secret", repeated), {
+    status: "invalid_response",
+  });
+});
