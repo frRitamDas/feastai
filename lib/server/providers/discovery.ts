@@ -1,6 +1,11 @@
+import { cloudflareBaseUrl, parseCloudflareCredential } from "./cloudflare";
+import { customProviderFetch, parseCustomCredential } from "./custom";
+
 /** Fixed provider endpoints only. Custom URLs need a separate SSRF-safe design. */
 const providers = {
   cerebras: "https://api.cerebras.ai/v1/models",
+  cloudflare: "https://api.cloudflare.com/client/v4/accounts",
+  custom: "https://invalid.example",
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
   groq: "https://api.groq.com/openai/v1/models",
   huggingface: "https://router.huggingface.co/v1/models",
@@ -79,11 +84,38 @@ export async function discoverModels(
   ) {
     return { status: "invalid_response" };
   }
+  let cloudflare: ReturnType<typeof parseCloudflareCredential> | null = null;
+  let custom: ReturnType<typeof parseCustomCredential> | null = null;
+  if (provider === "custom") {
+    try {
+      custom = parseCustomCredential(credential);
+    } catch {
+      return { status: "invalid_response" };
+    }
+  }
+  if (provider === "cloudflare") {
+    try {
+      cloudflare = parseCloudflareCredential(credential);
+    } catch {
+      return { status: "invalid_response" };
+    }
+  }
   try {
     const models = new Map<string, DiscoveredModel>();
     let pageToken: string | undefined;
     for (let page = 0; page < 20; page += 1) {
-      const url = new URL(providers[provider]);
+      const url = new URL(
+        cloudflare
+          ? `${cloudflareBaseUrl(cloudflare.accountId)}/models/search`
+          : custom
+            ? `${custom.baseUrl}/models`
+            : providers[provider]
+      );
+      if (cloudflare) {
+        url.searchParams.set("task", "Text Generation");
+        url.searchParams.set("page", String(page + 1));
+        url.searchParams.set("per_page", "100");
+      }
       if (provider === "gemini") {
         url.searchParams.set("pageSize", "1000");
         if (pageToken) {
@@ -92,11 +124,15 @@ export async function discoverModels(
       }
       // Pages are fetched sequentially and only from the fixed provider origin.
       // biome-ignore lint/performance/noAwaitInLoops: Pagination depends on the preceding response.
-      const response = await request(url.toString(), {
+      const response = await (custom
+        ? customProviderFetch(custom.baseUrl, request)
+        : request)(url.toString(), {
         headers:
           provider === "gemini"
             ? { "x-goog-api-key": credential }
-            : { Authorization: `Bearer ${credential}` },
+            : {
+                Authorization: `Bearer ${cloudflare?.apiToken ?? custom?.apiKey ?? credential}`,
+              },
         redirect: "error",
         signal: AbortSignal.timeout(10_000),
       });
@@ -119,6 +155,66 @@ export async function discoverModels(
         payload = await readBoundedJson(response);
       } catch {
         return { status: "invalid_response" };
+      }
+      if (provider === "cloudflare") {
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          !("result" in payload) ||
+          !Array.isArray(payload.result) ||
+          payload.result.length > 100 ||
+          ("success" in payload && payload.success !== true)
+        ) {
+          return { status: "invalid_response" };
+        }
+        const items = payload.result;
+        for (const item of items) {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            typeof item.name !== "string"
+          ) {
+            continue;
+          }
+          const id = item.name.trim();
+          if (id && id.length <= 300) {
+            models.set(id, { id, name: id });
+          }
+        }
+        if (models.size > 10_000) {
+          return { status: "invalid_response" };
+        }
+        const info =
+          "result_info" in payload &&
+          payload.result_info &&
+          typeof payload.result_info === "object"
+            ? payload.result_info
+            : null;
+        const perPage =
+          info &&
+          "per_page" in info &&
+          typeof info.per_page === "number" &&
+          info.per_page > 0
+            ? info.per_page
+            : 100;
+        const totalPages =
+          info && "total_pages" in info && typeof info.total_pages === "number"
+            ? info.total_pages
+            : undefined;
+        if (
+          totalPages !== undefined &&
+          (!Number.isInteger(totalPages) || totalPages < 0 || totalPages > 20)
+        ) {
+          return { status: "invalid_response" };
+        }
+        if (
+          totalPages === undefined
+            ? items.length < perPage
+            : page + 1 >= totalPages
+        ) {
+          return { models: [...models.values()], status: "discovered" };
+        }
+        continue;
       }
       if (provider !== "gemini") {
         const normalized = normalizeModels(payload);

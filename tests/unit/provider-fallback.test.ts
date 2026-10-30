@@ -102,3 +102,39 @@ test("errors after a stream is opened never trigger another key", async () => {
   });
   assert.equal(calls, 1);
 });
+
+test("automatic routes switch to an explicitly configured different provider before streaming", async () => {
+  const used: string[] = [];
+  const request: typeof fetch = (url, options) => {
+    used.push(`${String(url)}:${JSON.parse(String(options?.body)).model}`);
+    if (used.length === 1) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "busy" } }), {
+          headers: { "content-type": "application/json" },
+          status: 503,
+        })
+      );
+    }
+    assert.equal(
+      new Headers(options?.headers).get("authorization"),
+      "Bearer google"
+    );
+    return Promise.resolve(eventStream());
+  };
+  const route = createFallbackModel(
+    [
+      { credential: "groq", provider: "groq", upstreamId: "model-a" },
+      { credential: "google", provider: "gemini", upstreamId: "model-b" },
+    ],
+    request
+  );
+  const result = streamText({ maxRetries: 0, model: route, prompt: "Hello" });
+  let text = "";
+  for await (const chunk of result.textStream) {
+    text += chunk;
+  }
+  assert.equal(text, "OK");
+  assert.equal(used.length, 2);
+  assert.ok(used[0].endsWith(":model-a"));
+  assert.ok(used[1].endsWith(":model-b"));
+});

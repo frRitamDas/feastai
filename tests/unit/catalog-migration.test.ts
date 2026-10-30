@@ -47,6 +47,24 @@ test("catalog migration preserves chat data and denies public roles", async () =
     await db.exec(
       await readFile("lib/db/migrations/0008_grace_usage_events.sql", "utf8")
     );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0009_grace_cloudflare_provider.sql",
+        "utf8"
+      )
+    );
+    await db.exec(
+      await readFile("lib/db/migrations/0010_grace_routing_groups.sql", "utf8")
+    );
+    await db.exec(
+      await readFile("lib/db/migrations/0011_grace_custom_provider.sql", "utf8")
+    );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0012_grace_verification_health.sql",
+        "utf8"
+      )
+    );
     const existing = await db.query<{ title: string }>(
       'SELECT "title" FROM "Chat"'
     );
@@ -59,7 +77,10 @@ test("catalog migration preserves chat data and denies public roles", async () =
       )
     );
     await db.exec(
-      'CREATE ROLE catalog_anon; GRANT SELECT ON "GraceProviderKey", "GraceModel", "GraceKeyModel", "User", "Chat" TO catalog_anon; SET ROLE catalog_anon;'
+      `INSERT INTO "GraceRouteGroup" ("name") VALUES ('Private route')`
+    );
+    await db.exec(
+      'CREATE ROLE catalog_anon; GRANT SELECT ON "GraceProviderKey", "GraceModel", "GraceKeyModel", "GraceRouteGroup", "GraceRouteMember", "User", "Chat" TO catalog_anon; SET ROLE catalog_anon;'
     );
     assert.equal(
       (await db.query('SELECT * FROM "GraceProviderKey"')).rows.length,
@@ -68,6 +89,10 @@ test("catalog migration preserves chat data and denies public roles", async () =
     assert.equal((await db.query('SELECT * FROM "GraceModel"')).rows.length, 0);
     assert.equal((await db.query('SELECT * FROM "Chat"')).rows.length, 0);
     assert.equal((await db.query('SELECT * FROM "User"')).rows.length, 0);
+    assert.equal(
+      (await db.query('SELECT * FROM "GraceRouteGroup"')).rows.length,
+      0
+    );
     await db.exec("RESET ROLE");
   } finally {
     await db.close();

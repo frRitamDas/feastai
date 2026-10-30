@@ -114,9 +114,15 @@ export async function POST(request: Request) {
         NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
       >
     > = [];
-    if (selectedChatModel.startsWith("grace/")) {
+    if (
+      selectedChatModel.startsWith("grace/") ||
+      selectedChatModel.startsWith("auto/")
+    ) {
       const catalog = getRuntimeCatalog();
-      const modelId = selectedChatModel.slice("grace/".length);
+      const isAutomatic = selectedChatModel.startsWith("auto/");
+      const modelId = selectedChatModel.slice(
+        isAutomatic ? "auto/".length : "grace/".length
+      );
       if (
         !catalog ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -128,7 +134,9 @@ export async function POST(request: Request) {
           "The selected model is unavailable."
         ).toResponse();
       }
-      sharedModels = await catalog.resolveCandidates(modelId);
+      sharedModels = isAutomatic
+        ? await catalog.resolveRouteCandidates(modelId)
+        : await catalog.resolveCandidates(modelId);
       if (!sharedModels.length) {
         return new ChatbotError(
           "bad_request:api",

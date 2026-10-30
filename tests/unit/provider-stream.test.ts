@@ -102,3 +102,37 @@ test("Gemini streams through Google's fixed OpenAI-compatible endpoint", async (
   }
   assert.equal(result, "Hello");
 });
+
+test("Cloudflare streams with the validated account and bearer token", async () => {
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const request: typeof fetch = (url, options) => {
+    assert.equal(
+      String(url),
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`
+    );
+    assert.equal(
+      new Headers(options?.headers).get("authorization"),
+      "Bearer cloudflare-token"
+    );
+    assert.equal(options?.redirect, "error");
+    assert.equal(JSON.parse(String(options?.body)).model, "@cf/test/model");
+    return Promise.resolve(
+      new Response(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "OK", role: "assistant" }, finish_reason: null, index: 0 }], id: "1" })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop", index: 0 }], id: "1" })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } }
+      )
+    );
+  };
+  const model = createProviderModel(
+    "cloudflare",
+    "@cf/test/model",
+    JSON.stringify({ accountId, apiToken: "cloudflare-token" }),
+    request
+  );
+  const response = streamText({ maxRetries: 0, model, prompt: "Hi" });
+  let result = "";
+  for await (const text of response.textStream) {
+    result += text;
+  }
+  assert.equal(result, "OK");
+});

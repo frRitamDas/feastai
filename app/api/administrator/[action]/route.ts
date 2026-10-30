@@ -30,6 +30,11 @@ type Context = { params: Promise<{ action: string }> };
 const uuid = z.uuid();
 const bodySchema = z
   .object({
+    accountId: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/i)
+      .optional(),
+    baseUrl: z.url().max(512).optional(),
     code: z
       .string()
       .regex(/^\d{6}$/)
@@ -47,12 +52,15 @@ const bodySchema = z
         "openrouter",
         "gemini",
         "huggingface",
+        "cloudflare",
+        "custom",
         "cerebras",
         "sambanova",
         "mistral",
       ])
       .optional(),
     role: z.enum(["owner", "operator", "viewer"]).optional(),
+    routeId: uuid.optional(),
     totpSecret: z.string().min(16).max(128).optional(),
     upstreamId: z.string().trim().min(1).max(300).optional(),
     userId: uuid.optional(),
@@ -85,12 +93,13 @@ export async function GET(_request: Request, context: Context) {
       process.env.GRACE_ENCRYPTION_KEY &&
         process.env.GRACE_CATALOG_ENABLED === "1"
     );
-    const [keys, models] = catalogConfigured
+    const [keys, models, routes] = catalogConfigured
       ? await Promise.all([
           getAdminCatalog().listKeys(),
           getAdminCatalog().listCatalog(),
+          getAdminCatalog().listRoutes(),
         ])
-      : [[], []];
+      : [[], [], []];
     return reply({
       catalogConfigured,
       counts,
@@ -98,6 +107,7 @@ export async function GET(_request: Request, context: Context) {
       logs,
       models,
       role: admin.role,
+      routes,
       usage,
       users,
     });
@@ -192,7 +202,12 @@ export async function POST(request: Request, context: Context) {
     }
     await enforceIpRateLimit(admin.userId, "admin-action");
     const target =
-      data.userId ?? data.keyId ?? data.modelId ?? data.provider ?? null;
+      data.userId ??
+      data.keyId ??
+      data.routeId ??
+      data.modelId ??
+      data.provider ??
+      null;
     // Audit the attempt before any mutation or upstream request.
     await audit(admin.userId, action.slice(0, 64), target, "attempt");
     let result: unknown = { ok: true };
@@ -239,12 +254,27 @@ export async function POST(request: Request, context: Context) {
     const store = getAdminCatalog();
     switch (action) {
       case "add-key":
-        if (!(data.provider && data.label && data.credential)) {
+        if (
+          !(data.provider && data.label && data.credential) ||
+          (data.provider === "cloudflare" && !data.accountId) ||
+          (data.provider === "custom" && !data.baseUrl)
+        ) {
           return reply({ error: "Invalid request" }, 400);
         }
         result = {
           id: await store.addKey({
-            credential: data.credential,
+            credential:
+              data.provider === "cloudflare"
+                ? JSON.stringify({
+                    accountId: data.accountId,
+                    apiToken: data.credential,
+                  })
+                : data.provider === "custom"
+                  ? JSON.stringify({
+                      apiKey: data.credential,
+                      baseUrl: data.baseUrl,
+                    })
+                  : data.credential,
             label: data.label,
             provider: data.provider,
           }),
@@ -279,6 +309,30 @@ export async function POST(request: Request, context: Context) {
           return reply({ error: "Invalid request" }, 400);
         }
         await store.setPermission(data.keyId, data.modelId, data.enabled);
+        break;
+      case "route-create":
+        if (!data.name || data.name.length > 100) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        result = { id: await store.createRoute(data.name) };
+        break;
+      case "route-enabled":
+        if (!data.routeId || data.enabled === undefined) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setRouteEnabled(data.routeId, data.enabled);
+        break;
+      case "route-member":
+        if (!(data.routeId && data.modelId) || data.priority === undefined) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.setRouteMember(data.routeId, data.modelId, data.priority);
+        break;
+      case "route-remove":
+        if (!(data.routeId && data.modelId)) {
+          return reply({ error: "Invalid request" }, 400);
+        }
+        await store.removeRouteMember(data.routeId, data.modelId);
         break;
       case "key-priority":
         if (!data.keyId || data.priority === undefined) {

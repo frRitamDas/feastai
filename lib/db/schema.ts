@@ -190,9 +190,12 @@ export const graceKeyModel = pgTable(
   {
     available: boolean("available").notNull().default(false),
     keyId: uuid("keyId").notNull(),
+    lastCheckAt: timestamp("lastCheckAt", { withTimezone: true }),
+    lastCheckStatus: varchar("lastCheckStatus", { length: 32 }),
     lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    lastLatencyMs: integer("lastLatencyMs"),
     modelId: uuid("modelId").notNull(),
     permitted: boolean("permitted").notNull().default(false),
     provider: varchar("provider", { length: 32 }).notNull(),
@@ -281,4 +284,27 @@ export const graceUsageEvent = pgTable(
   (table) => ({
     created: index("GraceUsageEvent_createdAt_idx").on(table.createdAt.desc()),
   })
+);
+
+export const graceRouteGroup = pgTable("GraceRouteGroup", {
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  enabled: boolean("enabled").notNull().default(false),
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 100 }).notNull(),
+});
+
+export const graceRouteMember = pgTable(
+  "GraceRouteMember",
+  {
+    modelId: uuid("modelId")
+      .notNull()
+      .references(() => graceModel.id, { onDelete: "cascade" }),
+    priority: integer("priority").notNull().default(50),
+    routeId: uuid("routeId")
+      .notNull()
+      .references(() => graceRouteGroup.id, { onDelete: "cascade" }),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.routeId, table.modelId] }) })
 );

@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { APICallError } from "@ai-sdk/provider";
 import { generateText } from "ai";
 import {
   decryptCredential,
   type EncryptedCredential,
   encryptCredential,
 } from "../credential-crypto";
+import { parseCloudflareCredential } from "../providers/cloudflare";
+import { parseCustomCredential } from "../providers/custom";
 import {
   type DiscoveryProvider,
   type DiscoveryResult,
@@ -24,6 +27,8 @@ export interface CatalogDatabase {
 const PROVIDERS = new Set([
   "groq",
   "gemini",
+  "cloudflare",
+  "custom",
   "huggingface",
   "openrouter",
   "cerebras",
@@ -69,6 +74,12 @@ export class CatalogStore {
       /[\r\n]/.test(input.credential)
     ) {
       throw new Error("Invalid provider credential configuration");
+    }
+    if (input.provider === "custom") {
+      parseCustomCredential(input.credential);
+    }
+    if (input.provider === "cloudflare") {
+      parseCloudflareCredential(input.credential);
     }
     const id = randomUUID();
     const envelope = encryptCredential(
@@ -250,7 +261,7 @@ export class CatalogStore {
 
   listCatalog() {
     return this.db.query(
-      'SELECT m."id", m."provider", m."upstreamId", m."name", m."enabled", p."keyId", p."permitted", p."available", p."verifiedAt" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" ORDER BY m."provider", m."name", p."keyId"'
+      'SELECT m."id", m."provider", m."upstreamId", m."name", m."enabled", p."keyId", p."permitted", p."available", p."verifiedAt", p."lastCheckAt", p."lastCheckStatus", p."lastLatencyMs" FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id" ORDER BY m."provider", m."name", p."keyId"'
     );
   }
 
@@ -281,7 +292,8 @@ export class CatalogStore {
       keyId,
       this.encryptionKey
     );
-    let success = false;
+    let status = "unavailable";
+    const started = Date.now();
     try {
       const result = await generateText({
         abortSignal: AbortSignal.timeout(15_000),
@@ -295,22 +307,29 @@ export class CatalogStore {
         ),
         prompt: "Reply with OK.",
       });
-      success = result.text.trim().length > 0;
-    } catch {
-      // Never expose upstream error bodies, which may contain credentials.
+      status = result.text.trim().length > 0 ? "success" : "invalid_response";
+    } catch (error) {
+      if (
+        APICallError.isInstance(error) &&
+        (error.statusCode === 401 || error.statusCode === 403)
+      ) {
+        status = "authentication_failed";
+      } else if (APICallError.isInstance(error) && error.statusCode === 429) {
+        status = "rate_limited";
+      }
+      // Never store provider error bodies or credentials.
     }
-    if (success) {
-      // Re-check ciphertext and availability to avoid validating a changed key.
-      const rows = await this.db.query(
-        `UPDATE "GraceKeyModel" p SET "verifiedAt" = now()
-         FROM "GraceProviderKey" k WHERE p."keyId" = $1 AND p."modelId" = $2
-         AND p."available" = true AND k."id" = p."keyId" AND k."encryptedCredential" = $3::jsonb
-         RETURNING p."keyId"`,
-        [keyId, modelId, JSON.stringify(row.encryptedCredential)]
-      );
-      return rows.length > 0;
-    }
-    return false;
+    const latency = Math.max(0, Math.min(Date.now() - started, 2_147_483_647));
+    // Re-check ciphertext and availability to avoid recording a changed key.
+    const rows = await this.db.query(
+      `UPDATE "GraceKeyModel" p SET "verifiedAt" = CASE WHEN $4::text = 'success' THEN now() ELSE NULL END,
+       "lastCheckAt" = now(), "lastCheckStatus" = $4, "lastLatencyMs" = $5
+       FROM "GraceProviderKey" k WHERE p."keyId" = $1 AND p."modelId" = $2
+       AND p."available" = true AND k."id" = p."keyId" AND k."encryptedCredential" = $3::jsonb
+       RETURNING p."keyId"`,
+      [keyId, modelId, JSON.stringify(row.encryptedCredential), status, latency]
+    );
+    return status === "success" && rows.length > 0;
   }
 
   async resolveCandidates(modelId: string): Promise<
@@ -343,6 +362,96 @@ export class CatalogStore {
 
   async resolve(modelId: string) {
     return (await this.resolveCandidates(modelId))[0] ?? null;
+  }
+
+  async createRoute(name: string) {
+    const label = name.trim();
+    if (!label || label.length > 100) {
+      throw new Error("Invalid route name");
+    }
+    const [row] = await this.db.query<{ id: string }>(
+      'INSERT INTO "GraceRouteGroup" ("name") VALUES ($1) RETURNING "id"',
+      [label]
+    );
+    return row.id;
+  }
+
+  async setRouteEnabled(routeId: string, enabled: boolean) {
+    validId(routeId);
+    const rows = await this.db.query(
+      'UPDATE "GraceRouteGroup" SET "enabled" = $2 WHERE "id" = $1 RETURNING "id"',
+      [routeId, enabled]
+    );
+    if (!rows.length) {
+      throw new Error("Route not found");
+    }
+  }
+
+  async setRouteMember(routeId: string, modelId: string, priority: number) {
+    validId(routeId);
+    validId(modelId);
+    if (!Number.isInteger(priority) || priority < 0 || priority > 100) {
+      throw new Error("Invalid priority");
+    }
+    await this.db.query(
+      'INSERT INTO "GraceRouteMember" ("routeId", "modelId", "priority") VALUES ($1, $2, $3) ON CONFLICT ("routeId", "modelId") DO UPDATE SET "priority" = EXCLUDED."priority"',
+      [routeId, modelId, priority]
+    );
+  }
+
+  async removeRouteMember(routeId: string, modelId: string) {
+    validId(routeId);
+    validId(modelId);
+    const rows = await this.db.query(
+      'DELETE FROM "GraceRouteMember" WHERE "routeId" = $1 AND "modelId" = $2 RETURNING "modelId"',
+      [routeId, modelId]
+    );
+    if (!rows.length) {
+      throw new Error("Route member not found");
+    }
+  }
+
+  listRoutes() {
+    return this.db.query(
+      'SELECT r."id", r."name", r."enabled", p."modelId", p."priority", m."name" AS "modelName", m."provider" FROM "GraceRouteGroup" r LEFT JOIN "GraceRouteMember" p ON p."routeId" = r."id" LEFT JOIN "GraceModel" m ON m."id" = p."modelId" ORDER BY r."createdAt", p."priority", p."modelId"'
+    );
+  }
+
+  listPublicRoutes() {
+    return this.db.query(
+      'SELECT DISTINCT r."id", r."name" FROM "GraceRouteGroup" r JOIN "GraceRouteMember" rm ON rm."routeId" = r."id" JOIN "GraceModel" m ON m."id" = rm."modelId" JOIN "GraceKeyModel" p ON p."modelId" = m."id" JOIN "GraceProviderKey" k ON k."id" = p."keyId" WHERE r."enabled" = true AND m."enabled" = true AND p."permitted" = true AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true ORDER BY r."name", r."id"'
+    );
+  }
+
+  async resolveRouteCandidates(routeId: string): Promise<
+    Array<{
+      provider: DiscoveryProvider;
+      upstreamId: string;
+      credential: string;
+    }>
+  > {
+    validId(routeId);
+    const rows = await this.db.query<StoredKey & { upstreamId: string }>(
+      `SELECT "id", "provider", "encryptedCredential", "upstreamId" FROM (
+         SELECT k."id", k."provider", k."encryptedCredential", m."upstreamId", rm."priority" AS "routePriority", k."priority" AS "keyPriority", k."createdAt",
+           row_number() OVER (PARTITION BY m."id" ORDER BY k."priority", k."createdAt", k."id") AS "keyRank"
+         FROM "GraceRouteGroup" r JOIN "GraceRouteMember" rm ON rm."routeId" = r."id"
+         JOIN "GraceModel" m ON m."id" = rm."modelId" JOIN "GraceKeyModel" p ON p."modelId" = m."id"
+         JOIN "GraceProviderKey" k ON k."id" = p."keyId"
+         WHERE r."id" = $1 AND r."enabled" = true AND m."enabled" = true AND p."permitted" = true
+           AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true
+       ) ranked ORDER BY "keyRank", "routePriority", "keyPriority", "createdAt", "id" LIMIT 3`,
+      [routeId]
+    );
+    return rows.map((row) => ({
+      credential: decryptCredential(
+        row.encryptedCredential,
+        row.id,
+        this.encryptionKey
+      ),
+      provider: row.provider,
+      upstreamId: row.upstreamId,
+    }));
   }
 
   listPublicModels() {

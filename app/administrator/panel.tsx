@@ -25,6 +25,9 @@ type Model = {
   permitted: boolean;
   available: boolean;
   verifiedAt: string | null;
+  lastCheckAt: string | null;
+  lastCheckStatus: string | null;
+  lastLatencyMs: number | null;
 };
 type Overview = {
   role: "owner" | "operator" | "viewer";
@@ -38,6 +41,15 @@ type Overview = {
   };
   keys: Key[];
   models: Model[];
+  routes: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    modelId: string | null;
+    modelName: string | null;
+    provider: string | null;
+    priority: number | null;
+  }[];
   users: {
     id: string;
     email: string;
@@ -73,9 +85,15 @@ export function AdminConsole({ verified }: { verified: boolean }) {
   const [provider, setProvider] = useState("groq");
   const [label, setLabel] = useState("");
   const [credential, setCredential] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [keyId, setKeyId] = useState("");
   const [upstreamId, setUpstreamId] = useState("");
   const [modelName, setModelName] = useState("");
+  const [routeName, setRouteName] = useState("");
+  const [routeId, setRouteId] = useState("");
+  const [routeModel, setRouteModel] = useState("");
+  const [routePriority, setRoutePriority] = useState("50");
   const [adminUserId, setAdminUserId] = useState("");
   const [adminRole, setAdminRole] = useState("viewer");
   const [adminTotp, setAdminTotp] = useState("");
@@ -259,10 +277,18 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                     onSubmit={async (event) => {
                       event.preventDefault();
                       if (
-                        await action("add-key", { credential, label, provider })
+                        await action("add-key", {
+                          credential,
+                          label,
+                          provider,
+                          ...(provider === "cloudflare" ? { accountId } : {}),
+                          ...(provider === "custom" ? { baseUrl } : {}),
+                        })
                       ) {
                         setCredential("");
                         setLabel("");
+                        setAccountId("");
+                        setBaseUrl("");
                       }
                     }}
                   >
@@ -277,6 +303,8 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                         "openrouter",
                         "gemini",
                         "huggingface",
+                        "cloudflare",
+                        "custom",
                         "cerebras",
                         "sambanova",
                         "mistral",
@@ -290,6 +318,23 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                       required
                       value={label}
                     />
+                    {provider === "cloudflare" && (
+                      <Input
+                        onChange={(event) => setAccountId(event.target.value)}
+                        placeholder="Cloudflare account ID"
+                        required
+                        value={accountId}
+                      />
+                    )}
+                    {provider === "custom" && (
+                      <Input
+                        onChange={(event) => setBaseUrl(event.target.value)}
+                        placeholder="Allowed HTTPS base URL"
+                        required
+                        type="url"
+                        value={baseUrl}
+                      />
+                    )}
                     <Input
                       autoComplete="off"
                       onChange={(event) => setCredential(event.target.value)}
@@ -367,6 +412,156 @@ export function AdminConsole({ verified }: { verified: boolean }) {
             )}
             {section === "Models & routing" && (
               <div className="space-y-5">
+                <div className="rounded-2xl border p-5">
+                  <h2 className="font-semibold">Automatic routes</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Group interchangeable models across providers. Only verified
+                    and permitted members are used; lower numbers run first.
+                  </p>
+                  <form
+                    className="mt-4 flex flex-wrap gap-3"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (await action("route-create", { name: routeName })) {
+                        setRouteName("");
+                      }
+                    }}
+                  >
+                    <Input
+                      className="max-w-sm"
+                      onChange={(event) => setRouteName(event.target.value)}
+                      placeholder="Route name"
+                      required
+                      value={routeName}
+                    />
+                    <Button disabled={busy || !canEdit} type="submit">
+                      Create route
+                    </Button>
+                  </form>
+                  <form
+                    className="mt-4 grid gap-3 md:grid-cols-4"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await action("route-member", {
+                        modelId: routeModel,
+                        priority: Number(routePriority),
+                        routeId,
+                      });
+                    }}
+                  >
+                    <select
+                      aria-label="Route"
+                      className="rounded-lg border bg-background px-3"
+                      onChange={(event) => setRouteId(event.target.value)}
+                      required
+                      value={routeId}
+                    >
+                      <option value="">Select route</option>
+                      {data.routes
+                        .filter(
+                          (route, index, all) =>
+                            all.findIndex((item) => item.id === route.id) ===
+                            index
+                        )
+                        .map((route) => (
+                          <option key={route.id} value={route.id}>
+                            {route.name}
+                          </option>
+                        ))}
+                    </select>
+                    <select
+                      aria-label="Route model"
+                      className="rounded-lg border bg-background px-3"
+                      onChange={(event) => setRouteModel(event.target.value)}
+                      required
+                      value={routeModel}
+                    >
+                      <option value="">Select model</option>
+                      {data.models
+                        .filter(
+                          (model, index, all) =>
+                            all.findIndex((item) => item.id === model.id) ===
+                            index
+                        )
+                        .map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.provider} · {model.name}
+                          </option>
+                        ))}
+                    </select>
+                    <Input
+                      aria-label="Route priority"
+                      max={100}
+                      min={0}
+                      onChange={(event) => setRoutePriority(event.target.value)}
+                      required
+                      type="number"
+                      value={routePriority}
+                    />
+                    <Button disabled={busy || !canEdit} type="submit">
+                      Save member
+                    </Button>
+                  </form>
+                  <div className="mt-5 space-y-3">
+                    {data.routes
+                      .filter(
+                        (route, index, all) =>
+                          all.findIndex((item) => item.id === route.id) ===
+                          index
+                      )
+                      .map((route) => (
+                        <div className="rounded-xl border p-4" key={route.id}>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <strong>
+                              {route.name} ·{" "}
+                              {route.enabled ? "enabled" : "disabled"}
+                            </strong>
+                            <Button
+                              disabled={busy || !canEdit}
+                              onClick={() =>
+                                action("route-enabled", {
+                                  enabled: !route.enabled,
+                                  routeId: route.id,
+                                })
+                              }
+                              variant="outline"
+                            >
+                              {route.enabled ? "Disable" : "Enable"}
+                            </Button>
+                          </div>
+                          {data.routes
+                            .filter(
+                              (member) =>
+                                member.id === route.id && member.modelId
+                            )
+                            .map((member) => (
+                              <div
+                                className="mt-2 flex flex-wrap items-center justify-between gap-2 text-sm"
+                                key={member.modelId}
+                              >
+                                <span>
+                                  {member.provider} · {member.modelName} ·
+                                  priority {member.priority}
+                                </span>
+                                <Button
+                                  disabled={busy || !canEdit}
+                                  onClick={() =>
+                                    action("route-remove", {
+                                      modelId: member.modelId,
+                                      routeId: route.id,
+                                    })
+                                  }
+                                  size="sm"
+                                  variant="outline"
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            ))}
+                        </div>
+                      ))}
+                  </div>
+                </div>
                 <div className="rounded-2xl border p-5">
                   <h2 className="font-semibold">Register a model</h2>
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -462,6 +657,9 @@ export function AdminConsole({ verified }: { verified: boolean }) {
                             {model.provider} · {model.upstreamId} ·{" "}
                             {model.verifiedAt ? "verified" : "not verified"} ·{" "}
                             {model.available ? "registered" : "not discovered"}
+                            {model.lastCheckAt
+                              ? ` · last check: ${model.lastCheckStatus} (${model.lastLatencyMs} ms)`
+                              : " · never checked"}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2">

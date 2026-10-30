@@ -16,15 +16,24 @@ export async function GET() {
   try {
     const catalog = getRuntimeCatalog();
     if (catalog) {
-      const available = await catalog.listPublicModels();
+      const [available, routes] = await Promise.all([
+        catalog.listPublicModels(),
+        catalog.listPublicRoutes(),
+      ]);
       const shared = available.map((m) => ({
         description: "Shared provider model",
         id: `grace/${m.id}`,
         name: String(m.name),
         provider: String(m.provider),
       }));
+      const automatic = routes.map((route) => ({
+        description: "Administrator-configured automatic route",
+        id: `auto/${route.id}`,
+        name: String(route.name),
+        provider: "Grace AI",
+      }));
       const capabilities = { ...curatedCapabilities };
-      for (const model of shared) {
+      for (const model of [...shared, ...automatic]) {
         capabilities[model.id] = {
           reasoning: false,
           tools: false,
@@ -34,8 +43,8 @@ export async function GET() {
       return Response.json(
         {
           capabilities,
-          eligibleModelIds: shared.map((m) => m.id),
-          models: [...chatModels, ...shared],
+          eligibleModelIds: [...shared, ...automatic].map((m) => m.id),
+          models: [...chatModels, ...shared, ...automatic],
         },
         { headers: { "Cache-Control": "private, no-store" } }
       );
