@@ -10,6 +10,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (
+    pathname === "/api/ops/diagnostics" ||
     pathname.startsWith("/api/administrator/") ||
     pathname.startsWith("/administrator") ||
     pathname.startsWith("/api/conversations/") ||
