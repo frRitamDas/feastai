@@ -33,6 +33,7 @@ import {
   getChatById,
   getMessageCountByUserId,
   getMessagesByChatId,
+  recordUsage,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -43,7 +44,7 @@ import { ChatbotError } from "@/lib/errors";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
-import { createProviderModel } from "@/lib/server/providers/inference";
+import { createFallbackModel } from "@/lib/server/providers/fallback";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 import { mergeToolApprovals } from "@/lib/server/security/tool-approvals";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
@@ -108,9 +109,11 @@ export async function POST(request: Request) {
         "Attachments are temporarily unavailable."
       ).toResponse();
     }
-    let sharedModel: Awaited<
-      ReturnType<NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolve"]>
-    > = null;
+    let sharedModels: Awaited<
+      ReturnType<
+        NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
+      >
+    > = [];
     if (selectedChatModel.startsWith("grace/")) {
       const catalog = getRuntimeCatalog();
       const modelId = selectedChatModel.slice("grace/".length);
@@ -125,8 +128,8 @@ export async function POST(request: Request) {
           "The selected model is unavailable."
         ).toResponse();
       }
-      sharedModel = await catalog.resolve(modelId);
-      if (!sharedModel) {
+      sharedModels = await catalog.resolveCandidates(modelId);
+      if (!sharedModels.length) {
         return new ChatbotError(
           "bad_request:api",
           "The selected model is unavailable."
@@ -138,6 +141,7 @@ export async function POST(request: Request) {
         "The selected model is unavailable."
       ).toResponse();
     }
+    const [sharedModel] = sharedModels;
     const chatModel = selectedChatModel;
 
     const userType: UserType = session.user.type;
@@ -331,11 +335,7 @@ export async function POST(request: Request) {
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
           model: sharedModel
-            ? createProviderModel(
-                sharedModel.provider,
-                sharedModel.upstreamId,
-                sharedModel.credential
-              )
+            ? createFallbackModel(sharedModels)
             : getLanguageModel(chatModel),
           ...(sharedModel
             ? {
@@ -354,8 +354,20 @@ export async function POST(request: Request) {
               markModelActive();
             }
           },
-          onEnd() {
+          async onEnd({ callId, usage }) {
             stopWaitingStatus();
+            try {
+              await recordUsage({
+                callId,
+                chatId: id,
+                inputTokens: usage.inputTokens,
+                model: chatModel,
+                outputTokens: usage.outputTokens,
+                userId: session.user.id,
+              });
+            } catch {
+              console.error("Unable to record generation usage");
+            }
           },
           onError() {
             stopWaitingStatus();

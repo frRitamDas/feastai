@@ -151,3 +151,19 @@ test("Gemini discovery follows bounded pages without exposing credentials or emb
     status: "invalid_response",
   });
 });
+
+test("Hugging Face discovery uses a fixed router endpoint", async () => {
+  const request: typeof fetch = (url, init) => {
+    assert.equal(String(url), "https://router.huggingface.co/v1/models");
+    assert.equal(
+      new Headers(init?.headers).get("authorization"),
+      "Bearer test-token"
+    );
+    assert.equal(init?.redirect, "error");
+    return Promise.resolve(Response.json({ data: [{ id: "test/model" }] }));
+  };
+  assert.deepEqual(await discoverModels("huggingface", "test-token", request), {
+    models: [{ id: "test/model", name: "test/model" }],
+    status: "discovered",
+  });
+});

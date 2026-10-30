@@ -6,6 +6,7 @@ const origins: Record<DiscoveryProvider, string> = {
   cerebras: "https://api.cerebras.ai/v1",
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
   groq: "https://api.groq.com/openai/v1",
+  huggingface: "https://router.huggingface.co/v1",
   mistral: "https://api.mistral.ai/v1",
   openrouter: "https://openrouter.ai/api/v1",
   sambanova: "https://api.sambanova.ai/v1",

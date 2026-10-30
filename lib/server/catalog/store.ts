@@ -24,6 +24,7 @@ export interface CatalogDatabase {
 const PROVIDERS = new Set([
   "groq",
   "gemini",
+  "huggingface",
   "openrouter",
   "cerebras",
   "sambanova",
@@ -85,7 +86,7 @@ export class CatalogStore {
   listKeys() {
     // Deliberately never SELECT encryptedCredential here.
     return this.db.query(
-      'SELECT "id", "provider", "label", "enabled", "discoveryStatus", "lastDiscoveryAt", "createdAt" FROM "GraceProviderKey" ORDER BY "createdAt" DESC'
+      'SELECT "id", "provider", "label", "enabled", "priority", "discoveryStatus", "lastDiscoveryAt", "createdAt" FROM "GraceProviderKey" ORDER BY "createdAt" DESC'
     );
   }
 
@@ -189,6 +190,53 @@ export class CatalogStore {
     }
   }
 
+  async setKeyPriority(id: string, priority: number) {
+    validId(id);
+    if (!Number.isInteger(priority) || priority < 0 || priority > 100) {
+      throw new Error("Invalid priority");
+    }
+    const rows = await this.db.query(
+      'UPDATE "GraceProviderKey" SET "priority" = $2, "updatedAt" = now() WHERE "id" = $1 RETURNING "id"',
+      [id, priority]
+    );
+    if (!rows.length) {
+      throw new Error("Key not found");
+    }
+  }
+
+  async registerModel(keyId: string, upstreamId: string, name: string) {
+    validId(keyId);
+    const model = upstreamId.trim();
+    const label = name.trim();
+    if (
+      !model ||
+      model.length > 300 ||
+      !label ||
+      label.length > 300 ||
+      /[\r\n]/.test(model)
+    ) {
+      throw new Error("Invalid model");
+    }
+    return await this.db.transaction(async (tx) => {
+      const [key] = await tx.query<{ provider: string }>(
+        'SELECT "provider" FROM "GraceProviderKey" WHERE "id" = $1 FOR UPDATE',
+        [keyId]
+      );
+      if (!key) {
+        throw new Error("Key not found");
+      }
+      const [row] = await tx.query<{ id: string }>(
+        'INSERT INTO "GraceModel" ("provider", "upstreamId", "name") VALUES ($1, $2, $3) ON CONFLICT ("provider", "upstreamId") DO UPDATE SET "name" = EXCLUDED."name" RETURNING "id"',
+        [key.provider, model, label]
+      );
+      await tx.query(
+        'INSERT INTO "GraceKeyModel" ("keyId", "modelId", "provider", "available") VALUES ($1, $2, $3, true) ON CONFLICT ("keyId", "modelId") DO UPDATE SET "available" = true, "verifiedAt" = NULL',
+        [keyId, row.id, key.provider]
+      );
+      return row.id;
+    });
+  }
+
   async deleteKey(id: string) {
     validId(id);
     const rows = await this.db.query(
@@ -265,25 +313,24 @@ export class CatalogStore {
     return false;
   }
 
-  async resolve(modelId: string): Promise<{
-    provider: DiscoveryProvider;
-    upstreamId: string;
-    credential: string;
-  } | null> {
+  async resolveCandidates(modelId: string): Promise<
+    Array<{
+      provider: DiscoveryProvider;
+      upstreamId: string;
+      credential: string;
+    }>
+  > {
     validId(modelId);
-    const [row] = await this.db.query<StoredKey & { upstreamId: string }>(
+    const rows = await this.db.query<StoredKey & { upstreamId: string }>(
       `SELECT k."id", k."provider", k."encryptedCredential", m."upstreamId"
        FROM "GraceModel" m JOIN "GraceKeyModel" p ON p."modelId" = m."id"
        JOIN "GraceProviderKey" k ON k."id" = p."keyId"
        WHERE m."id" = $1 AND m."enabled" = true AND p."permitted" = true
        AND p."available" = true AND p."verifiedAt" IS NOT NULL AND k."enabled" = true
-       ORDER BY k."createdAt", k."id" LIMIT 1`,
+       ORDER BY k."priority", k."createdAt", k."id" LIMIT 3`,
       [modelId]
     );
-    if (!row) {
-      return null;
-    }
-    return {
+    return rows.map((row) => ({
       credential: decryptCredential(
         row.encryptedCredential,
         row.id,
@@ -291,7 +338,11 @@ export class CatalogStore {
       ),
       provider: row.provider,
       upstreamId: row.upstreamId,
-    };
+    }));
+  }
+
+  async resolve(modelId: string) {
+    return (await this.resolveCandidates(modelId))[0] ?? null;
   }
 
   listPublicModels() {

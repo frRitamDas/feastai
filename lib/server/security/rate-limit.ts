@@ -11,8 +11,16 @@ ON CONFLICT ("key") DO UPDATE SET
     THEN 1 ELSE "GraceRateLimit"."count" + 1 END
 RETURNING "count"`;
 
-export type RateLimitScope = "chat" | "login" | "guest" | "register";
+export type RateLimitScope =
+  | "chat"
+  | "login"
+  | "guest"
+  | "register"
+  | "admin"
+  | "admin-action";
 export const LIMITS: Record<RateLimitScope, number> = {
+  admin: 5,
+  "admin-action": 120,
   chat: 10,
   guest: 10,
   login: 20,

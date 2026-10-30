@@ -23,6 +23,30 @@ test("catalog migration preserves chat data and denies public roles", async () =
       "utf8"
     );
     await db.exec(privateTables);
+    await db.exec(
+      await readFile("lib/db/migrations/0003_grace_rate_limits.sql", "utf8")
+    );
+    await db.exec(
+      await readFile("lib/db/migrations/0004_grace_gemini_provider.sql", "utf8")
+    );
+    await db.exec(
+      await readFile("lib/db/migrations/0005_grace_administration.sql", "utf8")
+    );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0006_grace_routing_priority.sql",
+        "utf8"
+      )
+    );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0007_grace_huggingface_provider.sql",
+        "utf8"
+      )
+    );
+    await db.exec(
+      await readFile("lib/db/migrations/0008_grace_usage_events.sql", "utf8")
+    );
     const existing = await db.query<{ title: string }>(
       'SELECT "title" FROM "Chat"'
     );

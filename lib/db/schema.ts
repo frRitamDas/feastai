@@ -1,5 +1,6 @@
 import type { InferSelectModel } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   foreignKey,
   index,
@@ -154,6 +155,7 @@ export const graceProviderKey = pgTable(
     id: uuid("id").primaryKey().notNull(),
     label: varchar("label", { length: 100 }).notNull(),
     lastDiscoveryAt: timestamp("lastDiscoveryAt", { withTimezone: true }),
+    priority: integer("priority").notNull().default(50),
     provider: varchar("provider", { length: 32 }).notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true })
       .notNull()
@@ -221,5 +223,62 @@ export const graceRateLimit = pgTable(
   },
   (table) => ({
     expiry: index("GraceRateLimit_windowStart_idx").on(table.windowStart),
+  })
+);
+
+export const graceAdministrator = pgTable("GraceAdministrator", {
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  enabled: boolean("enabled").notNull().default(true),
+  lastTotpStep: bigint("lastTotpStep", { mode: "number" })
+    .notNull()
+    .default(-1),
+  role: varchar("role", { length: 16 }).notNull(),
+  totpSecret: jsonb("totpSecret").notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => user.id),
+});
+
+export const graceAdminAudit = pgTable(
+  "GraceAdminAudit",
+  {
+    action: varchar("action", { length: 64 }).notNull(),
+    actorId: uuid("actorId")
+      .notNull()
+      .references(() => user.id),
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: varchar("outcome", { length: 24 }).notNull(),
+    target: varchar("target", { length: 128 }),
+  },
+  (table) => ({
+    created: index("GraceAdminAudit_createdAt_idx").on(table.createdAt.desc()),
+  })
+);
+
+export const graceUsageEvent = pgTable(
+  "GraceUsageEvent",
+  {
+    callId: text("callId").primaryKey(),
+    chatId: uuid("chatId").references(() => chat.id, { onDelete: "set null" }),
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    inputTokens: integer("inputTokens"),
+    model: varchar("model", { length: 300 }).notNull(),
+    outputTokens: integer("outputTokens"),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => ({
+    created: index("GraceUsageEvent_createdAt_idx").on(table.createdAt.desc()),
   })
 );

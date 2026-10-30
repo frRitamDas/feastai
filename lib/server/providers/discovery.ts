@@ -3,6 +3,7 @@ const providers = {
   cerebras: "https://api.cerebras.ai/v1/models",
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
   groq: "https://api.groq.com/openai/v1/models",
+  huggingface: "https://router.huggingface.co/v1/models",
   mistral: "https://api.mistral.ai/v1/models",
   openrouter: "https://openrouter.ai/api/v1/models",
   sambanova: "https://api.sambanova.ai/v1/models",

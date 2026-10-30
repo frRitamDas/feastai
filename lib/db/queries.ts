@@ -643,3 +643,32 @@ export async function incrementRateLimit(key: string): Promise<number> {
   const rows = await client.unsafe<{ count: number }[]>(RATE_LIMIT_SQL, [key]);
   return rows[0]?.count ?? 0;
 }
+
+/** Persist provider-reported token counts without inventing values when absent. */
+export async function recordUsage({
+  callId,
+  userId,
+  chatId,
+  model,
+  inputTokens,
+  outputTokens,
+}: {
+  callId: string;
+  userId: string;
+  chatId: string;
+  model: string;
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
+}) {
+  const valid = (value: number | undefined) =>
+    Number.isSafeInteger(value) &&
+    value !== undefined &&
+    value >= 0 &&
+    value <= 2_147_483_647
+      ? value
+      : null;
+  await client.unsafe(
+    'INSERT INTO "GraceUsageEvent" ("callId", "userId", "chatId", "model", "inputTokens", "outputTokens") VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT ("callId") DO NOTHING',
+    [callId, userId, chatId, model, valid(inputTokens), valid(outputTokens)]
+  );
+}

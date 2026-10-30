@@ -35,6 +35,18 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
     await db.exec(
       await readFile("lib/db/migrations/0004_grace_gemini_provider.sql", "utf8")
     );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0006_grace_routing_priority.sql",
+        "utf8"
+      )
+    );
+    await db.exec(
+      await readFile(
+        "lib/db/migrations/0007_grace_huggingface_provider.sql",
+        "utf8"
+      )
+    );
     const store = new CatalogStore(
       adapter(db),
       randomBytes(32).toString("base64")
@@ -97,6 +109,36 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
     assert.equal(await store.verify(key, model, verify), true);
     assert.equal((await store.listPublicModels()).length, 1);
     assert.equal((await store.resolve(model))?.upstreamId, "model-a");
+    const alternate = await store.addKey({
+      credential: "alternate-key",
+      label: "Alternate",
+      provider: "groq",
+    });
+    await store.discover(alternate, mock);
+    await store.setKeyEnabled(alternate, true);
+    await store.setPermission(alternate, model, true);
+    assert.equal(
+      await store.verify(alternate, model, () =>
+        Promise.resolve(
+          Response.json({
+            choices: [
+              {
+                finish_reason: "stop",
+                index: 0,
+                message: { content: "OK", role: "assistant" },
+              },
+            ],
+            id: "test",
+            model: "model-a",
+            usage: { completion_tokens: 1, prompt_tokens: 1, total_tokens: 2 },
+          })
+        )
+      ),
+      true
+    );
+    await store.setKeyPriority(alternate, 0);
+    assert.equal((await store.resolve(model))?.credential, "alternate-key");
+    await store.deleteKey(alternate);
     assert.equal(
       await store.verify(key, model, () =>
         Promise.resolve(new Response("not authorized", { status: 401 }))
@@ -111,6 +153,36 @@ test("provider catalog encrypts keys, persists discovery and enforces permission
     );
     assert.deepEqual(await store.listPublicModels(), []);
     await assert.rejects(store.setPermission(key, model, true));
+    const secondKey = await store.addKey({
+      credential: "alternate-key",
+      label: "Backup",
+      provider: "groq",
+    });
+    const manualId = await store.registerModel(
+      secondKey,
+      "manual-model",
+      "Manual model"
+    );
+    await store.setKeyPriority(secondKey, 10);
+    assert.equal(
+      (await store.listKeys()).find((row) => row.id === secondKey)?.priority,
+      10
+    );
+    assert.equal(
+      (
+        await db.query<{
+          available: boolean;
+          permitted: boolean;
+          verifiedAt: string | null;
+        }>(
+          'SELECT "available", "permitted", "verifiedAt" FROM "GraceKeyModel" WHERE "keyId" = $1 AND "modelId" = $2',
+          [secondKey, manualId]
+        )
+      ).rows[0].verifiedAt,
+      null
+    );
+    assert.deepEqual(await store.listPublicModels(), []);
+    await store.deleteKey(secondKey);
     const gemini = await store.addKey({
       credential: "example-google-key",
       label: "Google",
