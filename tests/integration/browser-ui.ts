@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
 import { totpCode } from "../../lib/server/admin/totp";
 import { isValidCredentialKey } from "../../lib/server/credential-crypto";
+import { LIMITS } from "../../lib/server/security/rate-limit";
 
 /** Optional browser smoke test; provide a local Chromium executable via env. */
 export async function exerciseBrowser(base: string, totpSecret: string) {
@@ -393,27 +394,33 @@ export async function exerciseBrowser(base: string, totpSecret: string) {
     await releaseRefresh();
     await page.waitForLoadState("networkidle");
 
-    // The unchanged per-hour MFA limit should report an actionable 429 rather
-    // than masquerading as a generic server error.
-    const attempts = await page.evaluate(async (invalid) => {
-      const outcomes: { status: number; error?: string }[] = [];
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        const response = await fetch("/api/administrator/mfa", {
-          body: JSON.stringify({
-            challengeToken: `integration-admin-mfa-ratelimit-${attempt}`,
-            code: invalid,
-          }),
-          headers: { "Content-Type": "application/json" },
-          method: "POST",
-        });
-        const result = await response.json();
-        outcomes.push({ error: result.error, status: response.status });
-      }
-      return outcomes;
-    }, wrongCode);
+    // The per-hour MFA limit should report an actionable 429 rather than
+    // masquerading as a generic server error. Two admin-scope counters were
+    // already consumed by the UI attempts above, so the limit is reached after
+    // (LIMITS.admin - 2) more rejected codes.
+    const remaining = LIMITS.admin - 2;
+    const attempts = await page.evaluate(
+      async ({ invalid, attemptsToMake }) => {
+        const outcomes: { status: number; error?: string }[] = [];
+        for (let attempt = 0; attempt < attemptsToMake; attempt += 1) {
+          const response = await fetch("/api/administrator/mfa", {
+            body: JSON.stringify({
+              challengeToken: `integration-admin-mfa-ratelimit-${attempt}`,
+              code: invalid,
+            }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          });
+          const result = await response.json();
+          outcomes.push({ error: result.error, status: response.status });
+        }
+        return outcomes;
+      },
+      { attemptsToMake: remaining + 1, invalid: wrongCode }
+    );
     assert.deepEqual(
       attempts.map((item) => item.status),
-      [401, 401, 401, 429]
+      [...new Array(remaining).fill(401), 429]
     );
     assert.match(attempts.at(-1)?.error ?? "", /wait up to an hour/i);
     assert.deepEqual(errors, [], `browser exceptions: ${errors.join("; ")}`);

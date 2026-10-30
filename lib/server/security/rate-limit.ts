@@ -20,7 +20,9 @@ export type RateLimitScope =
   | "admin"
   | "admin-action";
 export const LIMITS: Record<RateLimitScope, number> = {
-  admin: 5,
+  // A 6-digit rotating TOTP is unbrute-forceable at this budget, while giving
+  // a legitimate operator headroom so UI retries cannot lock them out for an hour.
+  admin: 10,
   "admin-action": 120,
   chat: 10,
   guest: 10,
