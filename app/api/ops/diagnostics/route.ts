@@ -2,8 +2,14 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { ipAddress } from "@vercel/functions";
 import postgres from "postgres";
 import { resolveDatabaseUrl } from "@/lib/db/connection-url";
+import { SUPABASE_ROOT_CA_2021 } from "@/lib/db/supabase-ca";
 
-async function probe(url: string, forceTls = false, prepare = true) {
+async function probe(
+  url: string,
+  forceTls = false,
+  prepare = true,
+  useSupabaseCa = false
+) {
   let connection: ReturnType<typeof postgres> | undefined;
   try {
     connection = postgres(url, {
@@ -11,7 +17,11 @@ async function probe(url: string, forceTls = false, prepare = true) {
       idle_timeout: 1,
       max: 1,
       prepare,
-      ...(forceTls ? { ssl: "require" as const } : {}),
+      ...(useSupabaseCa
+        ? { ssl: { ca: SUPABASE_ROOT_CA_2021, rejectUnauthorized: true } }
+        : forceTls
+          ? { ssl: "require" as const }
+          : {}),
     });
     const [result] = await connection`
       SELECT (SELECT count(*)::int FROM "User") AS users,
@@ -89,11 +99,23 @@ export async function GET(request: Request) {
           effectiveConnection: await probe(effective),
           ...(searchParams.get("verify_tls") === "1"
             ? {
+                sessionPinned: await probe(
+                  verified.toString(),
+                  false,
+                  true,
+                  true
+                ),
                 sessionVerified: await probe(verified.toString()),
                 transactionConnection: await probe(
                   transaction.toString(),
                   false,
                   false
+                ),
+                transactionPinned: await probe(
+                  verifiedTransaction.toString(),
+                  false,
+                  false,
+                  true
                 ),
                 transactionVerified: await probe(
                   verifiedTransaction.toString(),
