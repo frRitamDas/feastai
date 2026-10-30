@@ -4,8 +4,9 @@ import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
 import { motion } from "framer-motion";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
 import {
   AlertDialog,
@@ -17,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -115,6 +117,30 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     { fallbackData: [], revalidateOnFocus: false }
   );
 
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timeout);
+  }, [search]);
+  const {
+    data: searchResults,
+    error: searchError,
+    isLoading: searchLoading,
+    mutate: refreshSearch,
+  } = useSWR<{ chats: Chat[] }>(
+    user && debouncedSearch
+      ? `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history/search?q=${encodeURIComponent(debouncedSearch)}`
+      : null,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+  const handleSearchChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) =>
+      setSearch(event.target.value),
+    []
+  );
+
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -127,32 +153,58 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     ? paginatedChatHistories.every((page) => page.chats.length === 0)
     : false;
 
-  const handleDelete = useCallback(() => {
+  const handleDelete = useCallback(async () => {
     const chatToDelete = deleteId;
-    const isCurrentChat = pathname === `/chat/${chatToDelete}`;
-
-    setShowDeleteDialog(false);
-
-    if (isCurrentChat) {
-      router.replace("/");
+    if (!chatToDelete) {
+      return;
     }
-
-    mutate((chatHistories) => {
-      if (chatHistories) {
-        return chatHistories.map((chatHistory) => ({
-          ...chatHistory,
-          chats: chatHistory.chats.filter((chat) => chat.id !== chatToDelete),
-        }));
+    setShowDeleteDialog(false);
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat?id=${chatToDelete}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        throw new Error("Delete failed");
       }
-    });
+      await mutate(
+        (chatHistories) =>
+          chatHistories?.map((chatHistory) => ({
+            ...chatHistory,
+            chats: chatHistory.chats.filter((chat) => chat.id !== chatToDelete),
+          })),
+        { revalidate: false }
+      );
+      if (pathname === `/chat/${chatToDelete}`) {
+        router.replace("/");
+      }
+      if (debouncedSearch) {
+        await refreshSearch();
+      }
+      toast.success("Conversation deleted");
+    } catch {
+      toast.error("Could not delete the conversation. Try again.");
+    }
+  }, [debouncedSearch, deleteId, mutate, pathname, refreshSearch, router]);
 
-    fetch(
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat?id=${chatToDelete}`,
-      { method: "DELETE" }
-    );
-
-    toast.success("Chat deleted");
-  }, [deleteId, mutate, pathname, router]);
+  const handleRenamed = useCallback(
+    (chatId: string, title: string) => {
+      if (debouncedSearch) {
+        refreshSearch();
+      }
+      mutate(
+        (histories) =>
+          histories?.map((page) => ({
+            ...page,
+            chats: page.chats.map((chat) =>
+              chat.id === chatId ? { ...chat, title } : chat
+            ),
+          })),
+        { revalidate: false }
+      );
+    },
+    [debouncedSearch, mutate, refreshSearch]
+  );
 
   const handleShowDeleteDialog = useCallback((chatId: string) => {
     setDeleteId(chatId);
@@ -160,10 +212,10 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   }, []);
 
   const handleViewportEnter = useCallback(() => {
-    if (!isValidating && !hasReachedEnd) {
+    if (!debouncedSearch && !isValidating && !hasReachedEnd) {
       setSize((size) => size + 1);
     }
-  }, [hasReachedEnd, isValidating, setSize]);
+  }, [debouncedSearch, hasReachedEnd, isValidating, setSize]);
 
   if (!user) {
     return (
@@ -228,12 +280,44 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
           History
         </SidebarGroupLabel>
         <SidebarGroupContent>
+          <div className="px-1 pb-3">
+            <Input
+              aria-label="Search conversations"
+              maxLength={100}
+              onChange={handleSearchChange}
+              placeholder="Search conversations"
+              type="search"
+              value={search}
+            />
+          </div>
+          {debouncedSearch && searchLoading ? (
+            <p className="px-2 text-sm text-muted-foreground">Searching…</p>
+          ) : null}
+          {debouncedSearch && searchError ? (
+            <p className="px-2 text-sm text-destructive">
+              Search failed. Try again.
+            </p>
+          ) : null}
+          {debouncedSearch &&
+          searchResults &&
+          searchResults.chats.length === 0 ? (
+            <p className="px-2 text-sm text-muted-foreground">
+              No conversations found.
+            </p>
+          ) : null}
+          {debouncedSearch &&
+          searchResults &&
+          searchResults.chats.length === 50 ? (
+            <p className="px-2 pb-2 text-xs text-muted-foreground">
+              Showing the first 50 matches.
+            </p>
+          ) : null}
           <SidebarMenu>
             {paginatedChatHistories
               ? (() => {
-                  const chatsFromHistory = paginatedChatHistories.flatMap(
-                    (paginatedChatHistory) => paginatedChatHistory.chats
-                  );
+                  const chatsFromHistory = debouncedSearch
+                    ? (searchResults?.chats ?? [])
+                    : paginatedChatHistories.flatMap((page) => page.chats);
 
                   const groupedChats = groupChatsByDate(chatsFromHistory);
 
@@ -250,6 +334,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                               isActive={chat.id === id}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
+                              onRenamed={handleRenamed}
                               setOpenMobile={setOpenMobile}
                             />
                           ))}
@@ -267,6 +352,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                               isActive={chat.id === id}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
+                              onRenamed={handleRenamed}
                               setOpenMobile={setOpenMobile}
                             />
                           ))}
@@ -284,6 +370,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                               isActive={chat.id === id}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
+                              onRenamed={handleRenamed}
                               setOpenMobile={setOpenMobile}
                             />
                           ))}
@@ -301,6 +388,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                               isActive={chat.id === id}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
+                              onRenamed={handleRenamed}
                               setOpenMobile={setOpenMobile}
                             />
                           ))}
@@ -318,6 +406,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
                               isActive={chat.id === id}
                               key={chat.id}
                               onDelete={handleShowDeleteDialog}
+                              onRenamed={handleRenamed}
                               setOpenMobile={setOpenMobile}
                             />
                           ))}
@@ -331,7 +420,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
 
           <motion.div onViewportEnter={handleViewportEnter} />
 
-          {hasReachedEnd ? null : (
+          {hasReachedEnd || debouncedSearch ? null : (
             <div className="mt-1 flex flex-row items-center gap-2 px-4 py-2 text-sidebar-foreground/50">
               <div className="animate-spin">
                 <LoaderIcon />

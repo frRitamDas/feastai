@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { auth } from "@/app/(auth)/auth";
 import { deleteAllChatsByUserId, getChatsByUserId } from "@/lib/db/queries";
 import { ChatbotError } from "@/lib/errors";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -36,7 +37,10 @@ export async function GET(request: NextRequest) {
   return Response.json(chats);
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return Response.json({ error: "Invalid request origin" }, { status: 403 });
+  }
   const session = await auth();
 
   if (!session?.user) {

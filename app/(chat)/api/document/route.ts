@@ -8,6 +8,7 @@ import {
   updateDocumentContent,
 } from "@/lib/db/queries";
 import { ChatbotError } from "@/lib/errors";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
 
 const documentSchema = z.object({
   content: z.string(),
@@ -108,6 +109,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return Response.json({ error: "Invalid request origin" }, { status: 403 });
+  }
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
   const timestamp = searchParams.get("timestamp");
@@ -136,6 +140,9 @@ export async function DELETE(request: Request) {
 
   const [document] = documents;
 
+  if (!document) {
+    return new ChatbotError("not_found:document").toResponse();
+  }
   if (document.userId !== session.user.id) {
     return new ChatbotError("forbidden:document").toResponse();
   }

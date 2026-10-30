@@ -5,7 +5,19 @@ import { motion } from "framer-motion";
 import { ChevronLeftIcon, ChevronRightIcon, DiffIcon } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useState } from "react";
+import { toast } from "sonner";
 import { useSWRConfig } from "swr";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useArtifact } from "@/hooks/use-artifact";
 import type { Document } from "@/lib/db/schema";
 import { cn, getDocumentTimestampByIndex } from "@/lib/utils";
@@ -55,35 +67,28 @@ export const VersionFooter = ({
     setIsMutating(true);
 
     try {
+      const timestamp = getDocumentTimestampByIndex(
+        documents,
+        currentVersionIndex
+      );
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/document?id=${artifact.documentId}&timestamp=${encodeURIComponent(timestamp.toISOString())}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        throw new Error("Restore failed");
+      }
       await mutate(
         `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/document?id=${artifact.documentId}`,
-        await fetch(
-          `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/document?id=${artifact.documentId}&timestamp=${getDocumentTimestampByIndex(
-            documents,
-            currentVersionIndex
-          )}`,
-          {
-            method: "DELETE",
-          }
+        documents.filter(
+          (document) =>
+            !isAfter(new Date(document.createdAt), new Date(timestamp))
         ),
-        {
-          optimisticData: documents
-            ? [
-                ...documents.filter((document) =>
-                  isAfter(
-                    new Date(document.createdAt),
-                    new Date(
-                      getDocumentTimestampByIndex(
-                        documents,
-                        currentVersionIndex
-                      )
-                    )
-                  )
-                ),
-              ]
-            : [],
-        }
+        { revalidate: false }
       );
+      toast.success("Version restored");
+    } catch {
+      toast.error("Could not restore this version. Try again.");
     } finally {
       setIsMutating(false);
     }
@@ -143,19 +148,37 @@ export const VersionFooter = ({
       </div>
 
       <div className="flex flex-row gap-2">
-        <button
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-all duration-150 hover:opacity-90 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
-          disabled={isMutating}
-          onClick={handleRestore}
-          type="button"
-        >
-          Restore
-          {isMutating ? (
-            <div className="animate-spin">
-              <LoaderIcon size={14} />
-            </div>
-          ) : null}
-        </button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-all duration-150 hover:opacity-90 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+              disabled={isMutating}
+              type="button"
+            >
+              Restore
+              {isMutating ? (
+                <div className="animate-spin">
+                  <LoaderIcon size={14} />
+                </div>
+              ) : null}
+            </button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Restore this version?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes all newer versions and their
+                suggestions. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleRestore}>
+                Restore version
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <button
           className="inline-flex items-center justify-center rounded-lg border border-border px-3 py-1.5 text-sm font-medium transition-all duration-150 hover:bg-muted active:scale-[0.98]"
           onClick={handleLatest}

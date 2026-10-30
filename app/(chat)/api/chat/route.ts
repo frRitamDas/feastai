@@ -42,6 +42,7 @@ import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import { checkIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
 import { createProviderModel } from "@/lib/server/providers/inference";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -135,7 +136,7 @@ export async function POST(request: Request) {
       id: session.user.id,
     });
 
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerHour) {
+    if (messageCount >= entitlementsByUserType[userType].maxMessagesPerHour) {
       return new ChatbotError("rate_limit:chat").toResponse();
     }
 
@@ -506,6 +507,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return Response.json({ error: "Invalid request origin" }, { status: 403 });
+  }
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 

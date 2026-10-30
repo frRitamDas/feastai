@@ -8,6 +8,7 @@ import {
   eq,
   gt,
   gte,
+  ilike,
   inArray,
   lt,
   type SQL,
@@ -17,6 +18,7 @@ import postgres from "postgres";
 import type { ArtifactKind } from "@/components/chat/artifact";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { ChatbotError } from "../errors";
+import { escapeSearchTerm } from "../server/conversations/search";
 import { generateUUID } from "../utils";
 import {
   type Chat,
@@ -98,15 +100,16 @@ export async function saveChat({
 
 export async function deleteChatById({ id }: { id: string }) {
   try {
-    await db.delete(vote).where(eq(vote.chatId, id));
-    await db.delete(message).where(eq(message.chatId, id));
-    await db.delete(stream).where(eq(stream.chatId, id));
-
-    const [chatsDeleted] = await db
-      .delete(chat)
-      .where(eq(chat.id, id))
-      .returning();
-    return chatsDeleted;
+    return await db.transaction(async (tx) => {
+      await tx.delete(vote).where(eq(vote.chatId, id));
+      await tx.delete(message).where(eq(message.chatId, id));
+      await tx.delete(stream).where(eq(stream.chatId, id));
+      const [deleted] = await tx
+        .delete(chat)
+        .where(eq(chat.id, id))
+        .returning();
+      return deleted;
+    });
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
@@ -114,27 +117,24 @@ export async function deleteChatById({ id }: { id: string }) {
 
 export async function deleteAllChatsByUserId({ userId }: { userId: string }) {
   try {
-    const userChats = await db
-      .select({ id: chat.id })
-      .from(chat)
-      .where(eq(chat.userId, userId));
-
-    if (userChats.length === 0) {
-      return { deletedCount: 0 };
-    }
-
-    const chatIds = userChats.map((c) => c.id);
-
-    await db.delete(vote).where(inArray(vote.chatId, chatIds));
-    await db.delete(message).where(inArray(message.chatId, chatIds));
-    await db.delete(stream).where(inArray(stream.chatId, chatIds));
-
-    const deletedChats = await db
-      .delete(chat)
-      .where(eq(chat.userId, userId))
-      .returning();
-
-    return { deletedCount: deletedChats.length };
+    return await db.transaction(async (tx) => {
+      const userChats = await tx
+        .select({ id: chat.id })
+        .from(chat)
+        .where(eq(chat.userId, userId));
+      if (userChats.length === 0) {
+        return { deletedCount: 0 };
+      }
+      const chatIds = userChats.map((item) => item.id);
+      await tx.delete(vote).where(inArray(vote.chatId, chatIds));
+      await tx.delete(message).where(inArray(message.chatId, chatIds));
+      await tx.delete(stream).where(inArray(stream.chatId, chatIds));
+      const deleted = await tx
+        .delete(chat)
+        .where(and(eq(chat.userId, userId), inArray(chat.id, chatIds)))
+        .returning();
+      return { deletedCount: deleted.length };
+    });
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
@@ -172,7 +172,7 @@ export async function getChatsByUserId({
       const [selectedChat] = await db
         .select()
         .from(chat)
-        .where(eq(chat.id, startingAfter))
+        .where(and(eq(chat.id, startingAfter), eq(chat.userId, id)))
         .limit(1);
 
       if (!selectedChat) {
@@ -187,7 +187,7 @@ export async function getChatsByUserId({
       const [selectedChat] = await db
         .select()
         .from(chat)
-        .where(eq(chat.id, endingBefore))
+        .where(and(eq(chat.id, endingBefore), eq(chat.userId, id)))
         .limit(1);
 
       if (!selectedChat) {
@@ -410,19 +410,20 @@ export async function deleteDocumentsByIdAfterTimestamp({
   timestamp: Date;
 }) {
   try {
-    await db
-      .delete(suggestion)
-      .where(
-        and(
-          eq(suggestion.documentId, id),
-          gt(suggestion.documentCreatedAt, timestamp)
-        )
-      );
-
-    return await db
-      .delete(document)
-      .where(and(eq(document.id, id), gt(document.createdAt, timestamp)))
-      .returning();
+    return await db.transaction(async (tx) => {
+      await tx
+        .delete(suggestion)
+        .where(
+          and(
+            eq(suggestion.documentId, id),
+            gt(suggestion.documentCreatedAt, timestamp)
+          )
+        );
+      return await tx
+        .delete(document)
+        .where(and(eq(document.id, id), gt(document.createdAt, timestamp)))
+        .returning();
+    });
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
@@ -522,9 +523,12 @@ export async function updateChatTitleById({
   title: string;
 }) {
   try {
-    return await db.update(chat).set({ title }).where(eq(chat.id, chatId));
+    return await db
+      .update(chat)
+      .set({ title })
+      .where(and(eq(chat.id, chatId), eq(chat.title, "New chat")));
   } catch {
-    // Best effort title update.
+    console.error("Unable to update generated conversation title");
   }
 }
 
@@ -585,6 +589,49 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
       .execute();
 
     return streamIds.map(({ id }) => id);
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+/** Atomic ownership check prevents a rename from affecting another user's chat. */
+export async function renameOwnedChat({
+  id,
+  userId,
+  title,
+}: {
+  id: string;
+  userId: string;
+  title: string;
+}) {
+  try {
+    const [renamed] = await db
+      .update(chat)
+      .set({ title })
+      .where(and(eq(chat.id, id), eq(chat.userId, userId)))
+      .returning({ id: chat.id, title: chat.title });
+    return renamed ?? null;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+/** Search only the caller's conversation titles; wildcard characters are literal. */
+export async function searchChatsByUserId({
+  id,
+  query,
+}: {
+  id: string;
+  query: string;
+}) {
+  try {
+    const literal = escapeSearchTerm(query);
+    return await db
+      .select()
+      .from(chat)
+      .where(and(eq(chat.userId, id), ilike(chat.title, `%${literal}%`)))
+      .orderBy(desc(chat.createdAt))
+      .limit(50);
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
