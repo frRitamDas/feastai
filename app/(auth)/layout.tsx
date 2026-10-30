@@ -14,6 +14,7 @@ export default function AuthLayout({
         <Link
           className="flex w-fit items-center gap-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
           href="/"
+          prefetch={false}
         >
           <ArrowLeftIcon className="size-3.5" />
           Back

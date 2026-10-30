@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
+import { isValidCredentialKey } from "../../lib/server/credential-crypto";
 
 /** Optional browser smoke test; provide a local Chromium executable via env. */
 export async function exerciseBrowser(base: string) {
@@ -48,6 +49,9 @@ export async function exerciseBrowser(base: string) {
     const guestPage = await guestContext.newPage();
     await guestPage.goto(`${base}/`);
     await guestPage.getByTestId("multimodal-input").waitFor();
+    // Let the guest's history/model requests finish before using the single
+    // embedded test database from a different browser context.
+    await guestPage.waitForLoadState("networkidle");
     await guestContext.close();
 
     // A real browser submission must display verification failures without
@@ -98,6 +102,36 @@ export async function exerciseBrowser(base: string) {
     assert.equal(
       (await registeredSession.json()).user.email,
       "new-person@example.com"
+    );
+
+    // The operator key generator must create canonical, distinct 32-byte keys
+    // in the browser without posting the value to any server.
+    await registrationPage.goto(`${base}/operator-key-generator.html`);
+    const generatorRequests: string[] = [];
+    registrationPage.on("request", (request) => {
+      generatorRequests.push(`${request.url()} ${request.postData() ?? ""}`);
+    });
+    await registrationPage
+      .getByRole("button", { name: "Generate key" })
+      .click();
+    const firstKey = await registrationPage
+      .getByLabel("Generated key")
+      .inputValue();
+    assert.equal(isValidCredentialKey(firstKey), true);
+    await registrationPage
+      .getByRole("button", { name: "Generate key" })
+      .click();
+    const secondKey = await registrationPage
+      .getByLabel("Generated key")
+      .inputValue();
+    assert.equal(isValidCredentialKey(secondKey), true);
+    assert.notEqual(firstKey, secondKey);
+    assert.equal(
+      generatorRequests.some((request) =>
+        [firstKey, secondKey].some((secret) => request.includes(secret))
+      ),
+      false,
+      "the generated key must never be sent in a request"
     );
     await registrationContext.close();
 
@@ -229,7 +263,7 @@ export async function exerciseBrowser(base: string) {
     assert.deepEqual(errors, [], `browser exceptions: ${errors.join("; ")}`);
     await context.close();
     console.log(
-      "Browser smoke passed: login, desktop/mobile chat, attachment-only rendering and admin verification"
+      "Browser smoke passed: signup, login, local key generation, desktop/mobile chat, private upload and admin verification"
     );
   } finally {
     await browser.close();

@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport">
+    <meta content="no-referrer" name="referrer">
+    <meta
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+      http-equiv="Content-Security-Policy"
+    >
+    <title>Encryption key setup · Grace AI</title>
+    <style>
+    :root {
+      font-family:
+        ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      color-scheme: dark;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      min-height: 100vh;
+      padding: 32px 20px;
+      margin: 0;
+      color: #f1edf8;
+      background: radial-gradient(circle at 50% -25%, #33294d, #0c0b10 55%);
+    }
+    main {
+      max-width: 650px;
+      margin: 7vh auto;
+    }
+    .brand {
+      font-size: 13px;
+      font-weight: 700;
+      color: #bca9ed;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+    h1 {
+      margin: 12px 0;
+      font-size: clamp(28px, 6vw, 42px);
+      letter-spacing: -0.04em;
+    }
+    p,
+    li {
+      font-size: 15px;
+      line-height: 1.65;
+      color: #c2bbce;
+    }
+    .panel {
+      padding: 24px;
+      background: #17141f;
+      border: 1px solid #3c354b;
+      border-radius: 18px;
+      box-shadow: 0 20px 60px #0005;
+    }
+    .warning {
+      padding: 0 0 0 14px;
+      color: #ead6b0;
+      border-left: 3px solid #e7bd78;
+    }
+    button,
+    a {
+      font: inherit;
+    }
+    button {
+      padding: 11px 16px;
+      font-weight: 650;
+      color: #f7f3ff;
+      cursor: pointer;
+      background: #554578;
+      border: 1px solid #66568a;
+      border-radius: 10px;
+    }
+    button:hover {
+      background: #685591;
+    }
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible {
+      outline: 3px solid #c8b7ff;
+      outline-offset: 3px;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    .copy {
+      background: #292334;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0 12px;
+    }
+    label {
+      display: block;
+      margin-top: 20px;
+      font-size: 13px;
+      font-weight: 650;
+      color: #ece4fc;
+    }
+    input {
+      width: 100%;
+      padding: 13px;
+      margin-top: 8px;
+      font:
+        14px ui-monospace,
+        SFMono-Regular,
+        Consolas,
+        monospace;
+      color: #f9f5ff;
+      background: #100e16;
+      border: 1px solid #494052;
+      border-radius: 9px;
+    }
+    ol {
+      padding-left: 21px;
+    }
+    li {
+      padding-left: 4px;
+      margin: 8px 0;
+    }
+    code {
+      color: #e4d8ff;
+      overflow-wrap: anywhere;
+    }
+    a {
+      color: #cebaff;
+      text-underline-offset: 3px;
+    }
+    .status {
+      min-height: 1.6em;
+      margin: 4px 0 0;
+      font-size: 13px;
+      color: #b8e8cb;
+    }
+    .fine {
+      font-size: 13px;
+      color: #a69caf;
+    }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="brand">Grace AI / operator setup</p>
+      <h1>Create an encryption key</h1>
+      <p>
+        This page creates a random key in your browser. It does not send the key
+        to Grace AI or store it. Keep it private; do not paste it into chat.
+      </p>
+      <section aria-label="Key generator" class="panel">
+        <p class="warning">
+          Use a new key only for initial setup. Replacing a working key after
+          adding administrators or provider keys makes those stored secrets
+          unreadable unless they are migrated.
+        </p>
+        <div class="controls">
+          <button id="generate" type="button">Generate key</button>
+          <button class="copy" disabled id="copy" type="button">
+            Copy key
+          </button>
+        </div>
+        <label for="key">Generated key</label>
+        <input
+          autocomplete="off"
+          id="key"
+          readonly
+          spellcheck="false"
+          type="text"
+          value=""
+        >
+        <p aria-live="polite" class="status" id="status"></p>
+        <ol>
+          <li>Generate the key and copy it. Keep a secure backup.</li>
+          <li>
+            In Vercel, open your <strong>graceorg</strong> project and go to
+            <strong>Settings → Environment Variables</strong>.
+          </li>
+          <li>
+            Edit <code>GRACE_ENCRYPTION_KEY</code> for
+            <strong>Production</strong>. Paste the key only—without quotes or
+            spaces—and save.
+          </li>
+          <li>
+            Tell your operator that it is saved. A redeploy is required before
+            setup can continue.
+          </li>
+        </ol>
+        <p class="fine">
+          The generated value is 44 characters and ends with <code>=</code>.
+          Never share it in a message or screenshot.
+        </p>
+      </section>
+    </main>
+    <script>
+    "use strict";
+    (() => {
+      const key = document.getElementById("key");
+      const generate = document.getElementById("generate");
+      const copy = document.getElementById("copy");
+      const status = document.getElementById("status");
+      generate.addEventListener("click", () => {
+        try {
+          const bytes = crypto.getRandomValues(new Uint8Array(32));
+          key.value = btoa(String.fromCharCode(...bytes));
+          copy.disabled = false;
+          status.textContent = "Key generated on this device.";
+        } catch {
+          status.textContent = "Your browser could not generate a secure key.";
+        }
+      });
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(key.value);
+          status.textContent =
+            "Copied. Paste it directly into Vercel and keep a secure backup.";
+        } catch {
+          key.focus();
+          key.select();
+          status.textContent =
+            "Select and copy the key, then paste it directly into Vercel.";
+        }
+      });
+    })();
+    </script>
+  </body>
+</html>
