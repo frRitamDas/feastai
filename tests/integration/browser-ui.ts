@@ -16,6 +16,21 @@ export async function exerciseBrowser(base: string) {
     const signup = await noIpPage.goto(`${base}/register`);
     assert.equal(signup?.status(), 200);
     await noIpPage.getByRole("heading", { name: "Create account" }).waitFor();
+    await noIpPage.getByLabel("Email").fill("no-ip@example.com");
+    await noIpPage.getByLabel("Password").fill("correct-password");
+    await noIpPage.getByRole("button", { name: "Sign up" }).click();
+    await noIpPage
+      .getByRole("alert")
+      .getByText(/couldn't create/)
+      .waitFor();
+    assert.equal(
+      await noIpPage.getByLabel("Email").inputValue(),
+      "no-ip@example.com"
+    );
+    assert.equal(
+      await noIpPage.getByLabel("Password").inputValue(),
+      "correct-password"
+    );
     await noIpPage.goto(`${base}/`);
     await noIpPage.waitForURL(`${base}/login?guest=unavailable`);
     await noIpPage
@@ -34,6 +49,57 @@ export async function exerciseBrowser(base: string) {
     await guestPage.goto(`${base}/`);
     await guestPage.getByTestId("multimodal-input").waitFor();
     await guestContext.close();
+
+    // A real browser submission must display verification failures without
+    // erasing entered fields, then create and sign in the account. Only the
+    // external Turnstile response is stubbed by the isolated test process.
+    const registrationContext = await browser.newContext({
+      extraHTTPHeaders: { "x-real-ip": "203.0.113.12" },
+      ignoreHTTPSErrors: true,
+    });
+    const registrationPage = await registrationContext.newPage();
+    await registrationPage.goto(`${base}/register`);
+    await registrationPage.getByLabel("Email").fill("new-person@example.com");
+    await registrationPage.getByLabel("Password").fill("correct-password");
+    await registrationPage.getByRole("button", { name: "Sign up" }).click();
+    try {
+      await registrationPage
+        .getByRole("alert")
+        .getByText(/Browser verification failed/)
+        .waitFor({ timeout: 10_000 });
+    } catch (error) {
+      console.error(
+        "Registration page:",
+        await registrationPage.locator("body").innerText()
+      );
+      throw error;
+    }
+    assert.equal(
+      await registrationPage.getByLabel("Email").inputValue(),
+      "new-person@example.com"
+    );
+    assert.equal(
+      await registrationPage.getByLabel("Password").inputValue(),
+      "correct-password"
+    );
+    await registrationPage.locator("form").evaluate((form) => {
+      const field = document.createElement("input");
+      field.type = "hidden";
+      field.name = "cf-turnstile-response";
+      field.value = "integration-valid-challenge";
+      form.append(field);
+    });
+    await registrationPage.getByRole("button", { name: "Sign up" }).click();
+    await registrationPage.waitForURL(`${base}/`, { timeout: 30_000 });
+    await registrationPage.getByTestId("multimodal-input").waitFor();
+    const registeredSession = await registrationPage.request.get(
+      `${base}/api/auth/session`
+    );
+    assert.equal(
+      (await registeredSession.json()).user.email,
+      "new-person@example.com"
+    );
+    await registrationContext.close();
 
     const context = await browser.newContext({
       extraHTTPHeaders: { "x-real-ip": "203.0.113.10" },
@@ -54,6 +120,20 @@ export async function exerciseBrowser(base: string) {
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`${base}/login`);
     await page.getByLabel("Email").fill("person@example.com");
+    await page.getByLabel("Password").fill("incorrect-password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page
+      .getByRole("alert")
+      .getByText(/couldn't sign you in/)
+      .waitFor();
+    assert.equal(
+      await page.getByLabel("Email").inputValue(),
+      "person@example.com"
+    );
+    assert.equal(
+      await page.getByLabel("Password").inputValue(),
+      "incorrect-password"
+    );
     await page.getByLabel("Password").fill("correct-password");
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(`${base}/`, { timeout: 30_000 });

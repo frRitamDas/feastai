@@ -7,63 +7,50 @@ import { useSession } from "next-auth/react";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { AuthForm } from "@/components/chat/auth-form";
 import { SubmitButton } from "@/components/chat/submit-button";
-import { toast } from "@/components/chat/toast";
 import { type RegisterActionState, register } from "../actions";
+
+const errors: Partial<Record<RegisterActionState["status"], string>> = {
+  disabled: "Registration is temporarily unavailable.",
+  failed: "We couldn't create your account. Please try again later.",
+  invalid_data:
+    "Enter a valid email and a password of 8–72 characters (up to 72 bytes).",
+  rate_limited: "Too many attempts. Please wait an hour and try again.",
+  user_exists: "An account with this email already exists. Try signing in.",
+  verification_failed:
+    "Browser verification failed or expired. Complete the Cloudflare check and try again.",
+};
 
 export default function Page() {
   const router = useRouter();
   const challengeRef = useRef<TurnstileInstance>(null);
-  const [email, setEmail] = useState("");
   const [isSuccessful, setIsSuccessful] = useState(false);
-
   const [state, formAction] = useActionState<RegisterActionState, FormData>(
     register,
     { status: "idle" }
   );
-
   const { update: updateSession } = useSession();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {
-    if (
-      state.status === "user_exists" ||
-      state.status === "failed" ||
-      state.status === "invalid_data"
-    ) {
+    if (errors[state.status]) {
       challengeRef.current?.reset();
-    }
-    if (state.status === "disabled") {
-      toast({
-        description: "Registration is temporarily unavailable.",
-        type: "error",
-      });
-    } else if (state.status === "user_exists") {
-      toast({ description: "Account already exists!", type: "error" });
-    } else if (state.status === "failed") {
-      toast({ description: "Failed to create account!", type: "error" });
-    } else if (state.status === "invalid_data") {
-      toast({
-        description: "Failed validating your submission!",
-        type: "error",
-      });
     } else if (state.status === "success") {
-      toast({ description: "Account created!", type: "success" });
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      updateSession()
+        .catch(() => null)
+        .then(() => {
+          router.replace("/");
+          router.refresh();
+        });
     }
-  }, [state]);
+  }, [state.status]);
 
-  const handleSubmit = (formData: FormData) => {
-    setEmail(formData.get("email") as string);
-    formAction(formData);
-  };
-
+  const error = errors[state.status];
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
       <p className="text-sm text-muted-foreground">Get started for free</p>
-      <AuthForm action={handleSubmit} defaultEmail={email}>
+      <AuthForm action={formAction} mode="register">
         {process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY ? (
           <Turnstile
             options={{ action: "register" }}
@@ -75,6 +62,11 @@ export default function Page() {
             Registration verification is unavailable.
           </p>
         ) : null}
+        {Boolean(error) && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
         <SubmitButton isSuccessful={isSuccessful}>Sign up</SubmitButton>
         <p className="text-center text-[13px] text-muted-foreground">
           {"Have an account? "}

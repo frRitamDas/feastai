@@ -165,11 +165,6 @@ async function main() {
         ["person@example.com"]
       )
     ).rows;
-    const bootstrapBody = {
-      bootstrapSecret,
-      code: totpCode(totpSecret, Math.floor(Date.now() / 30_000) - 1),
-      totpSecret,
-    };
     const bootstrap = (body: object) =>
       fetch(`${base}/api/administrator/bootstrap`, {
         body: JSON.stringify(body),
@@ -177,9 +172,22 @@ async function main() {
         method: "POST",
       });
     assert.equal(
-      (await bootstrap({ ...bootstrapBody, bootstrapSecret: "wrong" })).status,
+      (
+        await bootstrap({
+          bootstrapSecret: "wrong",
+          code: "000000",
+          totpSecret,
+        })
+      ).status,
       403
     );
+    // Generate the valid code after the first request has warmed the route, so
+    // compiling under load cannot age a previous-step code out of the window.
+    const bootstrapBody = {
+      bootstrapSecret,
+      code: totpCode(totpSecret, Math.floor(Date.now() / 30_000)),
+      totpSecret,
+    };
     assert.equal((await bootstrap(bootstrapBody)).status, 200);
     assert.equal((await bootstrap(bootstrapBody)).status, 409);
     const ownerRecord = await db.query(
@@ -202,7 +210,9 @@ async function main() {
       title: "Hello",
     });
     assert.equal(beforeMfa.status, 403);
-    const code = totpCode(totpSecret, Math.floor(Date.now() / 30_000));
+    // The next step is within the accepted clock-skew window and cannot reuse
+    // the step consumed by enrollment.
+    const code = totpCode(totpSecret, Math.floor(Date.now() / 30_000) + 1);
     const mfa = await post("mfa", { code });
     assert.equal(mfa.status, 200, `${await mfa.clone().text()} ${logs}`);
     const proof = mfa.headers

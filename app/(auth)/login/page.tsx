@@ -7,12 +7,10 @@ import { useActionState, useEffect, useState } from "react";
 
 import { AuthForm } from "@/components/chat/auth-form";
 import { SubmitButton } from "@/components/chat/submit-button";
-import { toast } from "@/components/chat/toast";
 import { type LoginActionState, login } from "../actions";
 
 export default function Page() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
   const [isSuccessful, setIsSuccessful] = useState(false);
   const [guestUnavailable, setGuestUnavailable] = useState(false);
 
@@ -26,29 +24,27 @@ export default function Page() {
     login,
     { status: "idle" }
   );
-
   const { update: updateSession } = useSession();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: router and updateSession are stable refs
   useEffect(() => {
-    if (state.status === "failed") {
-      toast({ description: "Invalid credentials!", type: "error" });
-    } else if (state.status === "invalid_data") {
-      toast({
-        description: "Failed validating your submission!",
-        type: "error",
-      });
-    } else if (state.status === "success") {
+    if (state.status === "success") {
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      updateSession()
+        .catch(() => null)
+        .then(() => {
+          router.replace("/");
+          router.refresh();
+        });
     }
   }, [state.status]);
 
-  const handleSubmit = (formData: FormData) => {
-    setEmail(formData.get("email") as string);
-    formAction(formData);
-  };
+  const error =
+    state.status === "failed"
+      ? "We couldn't sign you in. Check your email and password and try again."
+      : state.status === "invalid_data"
+        ? "Enter a valid email and password."
+        : null;
 
   return (
     <>
@@ -62,7 +58,12 @@ export default function Page() {
           later.
         </p>
       )}
-      <AuthForm action={handleSubmit} defaultEmail={email}>
+      <AuthForm action={formAction} mode="login">
+        {Boolean(error) && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
         <SubmitButton isSuccessful={isSuccessful}>Sign in</SubmitButton>
         <p className="text-center text-[13px] text-muted-foreground">
           {"No account? "}

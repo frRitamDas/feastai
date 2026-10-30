@@ -141,6 +141,8 @@ async function main() {
         AUTH_URL: base,
         GRACE_CATALOG_ENABLED: "1",
         GRACE_ENCRYPTION_KEY: encryptionKey,
+        GRACE_INTEGRATION_MOCK_TURNSTILE: "1",
+        GRACE_TURNSTILE_SECRET: "integration-only-turnstile-secret",
         NODE_ENV: "production",
         NODE_OPTIONS: `--require ${resolve("tests/integration/mock-provider.cjs")}`,
         POSTGRES_URL:
@@ -173,7 +175,16 @@ async function main() {
       await delay(1000);
     }
     assert.ok(ready, `Server did not start: ${logs}`);
-    await exerciseBrowser(base);
+    try {
+      await exerciseBrowser(base);
+    } catch (error) {
+      const counters = await db.query(
+        `SELECT split_part("key", ':', 1) AS scope, count(*)::int AS rows FROM "GraceRateLimit" GROUP BY 1`
+      );
+      console.error("Isolated rate-limit scopes:", counters.rows);
+      console.error(`Isolated browser server log:\n${logs}`);
+      throw error;
+    }
   } finally {
     child.kill("SIGTERM");
     await new Promise<void>((resolveClose) =>
