@@ -19,6 +19,7 @@ import type { ArtifactKind } from "@/components/chat/artifact";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { ChatbotError } from "../errors";
 import { escapeSearchTerm } from "../server/conversations/search";
+import { RATE_LIMIT_SQL } from "../server/security/rate-limit";
 import { generateUUID } from "../utils";
 import {
   type Chat,
@@ -635,4 +636,10 @@ export async function searchChatsByUserId({
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
+}
+
+/** Atomic distributed counter used only by trusted server-side callers. */
+export async function incrementRateLimit(key: string): Promise<number> {
+  const rows = await client.unsafe<{ count: number }[]>(RATE_LIMIT_SQL, [key]);
+  return rows[0]?.count ?? 0;
 }

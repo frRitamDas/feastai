@@ -3,6 +3,7 @@ import {
   boolean,
   foreignKey,
   index,
+  integer,
   json,
   jsonb,
   pgTable,
@@ -206,5 +207,19 @@ export const graceKeyModel = pgTable(
       foreignColumns: [graceModel.id, graceModel.provider],
     }).onDelete("cascade"),
     pk: primaryKey({ columns: [table.keyId, table.modelId] }),
+  })
+);
+
+export const graceRateLimit = pgTable(
+  "GraceRateLimit",
+  {
+    count: integer("count").notNull(),
+    key: text("key").primaryKey(),
+    windowStart: timestamp("windowStart", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    expiry: index("GraceRateLimit_windowStart_idx").on(table.windowStart),
   })
 );

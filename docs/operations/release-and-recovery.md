@@ -15,3 +15,9 @@ Distinguish application errors from database, hosting and upstream outages; do n
 ## Smoke tests
 
 Check the homepage, permitted sign-in and session validation, anonymous and ordinary-user denial of privileged endpoints, database reads/writes with safe test records, configured provider response, streaming, persistence and model selection. Test fallback with a controlled mock once implemented. Do not consume production tokens unnecessarily. Record failures and operator actions without secrets.
+
+## Rate limit operation
+
+Migration `0003_grace_rate_limits` adds server-only, RLS-protected one-hour counters for chat (10), guest creation (10), login (20), and registration (5) per IP and scope. Keys are HMACs using `AUTH_SECRET`, not raw addresses. Production requests fail closed if `AUTH_SECRET` is shorter than 32 characters, the trusted Vercel client IP is absent, or the database counter is unavailable. Deploy only behind a trusted proxy that replaces `x-real-ip`; do not trust this header from direct public clients. Fixed-window counters do not prevent distributed abuse and do not replace CAPTCHA.
+
+Expired counter rows are not currently pruned automatically. An operator can schedule bounded deletion of rows with `"windowStart" < now() - interval '24 hours'`; ensure the job runs as the trusted database role and monitor table size. Rotating `AUTH_SECRET` resets the effective counters and invalidates Auth.js sessions.

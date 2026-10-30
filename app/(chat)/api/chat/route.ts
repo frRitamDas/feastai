@@ -40,7 +40,7 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
-import { checkIpRateLimit } from "@/lib/ratelimit";
+import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
 import { createProviderModel } from "@/lib/server/providers/inference";
@@ -96,7 +96,7 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    await checkIpRateLimit(ipAddress(request));
+    await enforceIpRateLimit(ipAddress(request), "chat");
     let sharedModel: Awaited<
       ReturnType<NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolve"]>
     > = null;
