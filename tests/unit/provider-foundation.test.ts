@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   decryptCredential,
   encryptCredential,
+  isValidCredentialKey,
 } from "../../lib/server/credential-crypto";
 import {
   discoverModels,
@@ -33,6 +34,23 @@ test("credentials are encrypted, randomized and bound to their row", () => {
   );
   assert.throws(() => encryptCredential("secret", "key-1", undefined));
   assert.throws(() => encryptCredential("secret", "key-1", "wrong"));
+});
+
+test("credential-key configuration requires canonical 32-byte base64", () => {
+  const valid = Buffer.alloc(32, 42).toString("base64");
+  assert.equal(isValidCredentialKey(valid), true);
+  assert.equal(isValidCredentialKey(undefined), false);
+  assert.equal(isValidCredentialKey("wrong"), false);
+  assert.equal(
+    isValidCredentialKey(Buffer.alloc(32, 42).toString("hex")),
+    false
+  );
+  assert.equal(
+    isValidCredentialKey(Buffer.alloc(31, 42).toString("base64")),
+    false
+  );
+  // A syntactically base64-looking encoding with non-zero trailing pad bits.
+  assert.equal(isValidCredentialKey(`${valid.slice(0, -2)}r=`), false);
 });
 
 test("model discovery normalizes and deduplicates without inventing metadata", () => {

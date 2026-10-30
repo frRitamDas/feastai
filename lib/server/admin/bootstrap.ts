@@ -4,7 +4,10 @@ import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
-import { encryptCredential } from "@/lib/server/credential-crypto";
+import {
+  encryptCredential,
+  isValidCredentialKey,
+} from "@/lib/server/credential-crypto";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 import { verifyTurnstileChallenge } from "@/lib/server/security/turnstile";
 import { getAdminDatabase } from "./runtime";
@@ -29,7 +32,12 @@ export async function bootstrapAdministrator(request: Request) {
     return reply("Sign in with a regular account first.", 401);
   }
   const expected = process.env.GRACE_BOOTSTRAP_SECRET;
-  if (!expected || expected.length < 32 || expected.length > 256) {
+  if (
+    !expected ||
+    expected.length < 32 ||
+    expected.length > 256 ||
+    !isValidCredentialKey(process.env.GRACE_ENCRYPTION_KEY)
+  ) {
     return reply("Administrator setup is unavailable.", 503);
   }
   try {

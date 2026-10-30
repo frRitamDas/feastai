@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { auth } from "@/app/(auth)/auth";
 import { createCatalogDatabase } from "@/lib/server/catalog/postgres";
 import { type CatalogDatabase, CatalogStore } from "@/lib/server/catalog/store";
+import { isValidCredentialKey } from "@/lib/server/credential-crypto";
 import { verifyAdminProof } from "./session";
 
 export type AdminRole = "owner" | "operator" | "viewer";
@@ -22,7 +23,7 @@ export function getAdminDatabase(): CatalogDatabase {
 }
 export function getAdminCatalog(): CatalogStore {
   if (
-    !process.env.GRACE_ENCRYPTION_KEY ||
+    !isValidCredentialKey(process.env.GRACE_ENCRYPTION_KEY) ||
     process.env.GRACE_CATALOG_ENABLED !== "1"
   ) {
     throw new Error("Catalog unavailable");

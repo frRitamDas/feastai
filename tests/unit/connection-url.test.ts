@@ -21,7 +21,7 @@ test("builds a Supabase session-pooler URL without altering credentials", () => 
   assert.equal(result.username, "postgres.abcdefghijklmnopqrst");
   assert.equal(result.password, "example%40secret");
   assert.equal(result.searchParams.get("application_name"), "grace");
-  assert.equal(result.searchParams.get("sslmode"), "verify-full");
+  assert.equal(result.searchParams.get("sslmode"), "require");
   assert.equal(
     resolveDatabaseUrl(result.toString(), pooler),
     result.toString()

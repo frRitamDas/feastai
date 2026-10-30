@@ -18,6 +18,7 @@ import {
   decryptCredential,
   type EncryptedCredential,
   encryptCredential,
+  isValidCredentialKey,
 } from "@/lib/server/credential-crypto";
 import { readLimitedJson } from "@/lib/server/security/read-limited-json";
 import { verifyTurnstileChallenge } from "@/lib/server/security/turnstile";
@@ -113,10 +114,9 @@ export async function GET(_request: Request, context: Context) {
     const logs = await db.query(
       'SELECT "id", "actorId", "action", "target", "outcome", "createdAt" FROM "GraceAdminAudit" ORDER BY "createdAt" DESC LIMIT 100'
     );
-    const catalogConfigured = Boolean(
-      process.env.GRACE_ENCRYPTION_KEY &&
-        process.env.GRACE_CATALOG_ENABLED === "1"
-    );
+    const catalogConfigured =
+      process.env.GRACE_CATALOG_ENABLED === "1" &&
+      isValidCredentialKey(process.env.GRACE_ENCRYPTION_KEY);
     const [keys, models, routes] = catalogConfigured
       ? await Promise.all([
           getAdminCatalog().listKeys(),

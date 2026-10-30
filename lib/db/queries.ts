@@ -48,7 +48,8 @@ const client = postgres(
   resolveDatabaseUrl(
     process.env.POSTGRES_URL ?? "",
     process.env.GRACE_SUPABASE_POOLER_HOST
-  )
+  ),
+  { connect_timeout: 10, idle_timeout: 5, max: 1 }
 );
 const db = drizzle(client);
 

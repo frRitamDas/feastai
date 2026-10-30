@@ -9,7 +9,7 @@ export function createCatalogDatabase(url: string) {
   }
   const connection = postgres(
     resolveDatabaseUrl(url, process.env.GRACE_SUPABASE_POOLER_HOST),
-    { max: 1 }
+    { connect_timeout: 10, idle_timeout: 5, max: 1 }
   );
   function wrap(sql: postgres.Sql | postgres.TransactionSql): CatalogDatabase {
     return {

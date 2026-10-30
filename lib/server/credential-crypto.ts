@@ -9,15 +9,22 @@ export type EncryptedCredential = {
   tag: string;
 };
 
-function getKey(encodedKey: string | undefined): Buffer {
+/** Only a canonical base64 encoding of exactly 32 bytes can be used as a key. */
+export function isValidCredentialKey(
+  encodedKey: string | undefined
+): encodedKey is string {
   if (!encodedKey || !/^[A-Za-z0-9+/]{43}=$/.test(encodedKey)) {
-    throw new Error("Credential encryption is not configured correctly");
+    return false;
   }
   const key = Buffer.from(encodedKey, "base64");
-  if (key.length !== 32 || key.toString("base64") !== encodedKey) {
+  return key.length === 32 && key.toString("base64") === encodedKey;
+}
+
+function getKey(encodedKey: string | undefined): Buffer {
+  if (!isValidCredentialKey(encodedKey)) {
     throw new Error("Credential encryption is not configured correctly");
   }
-  return key;
+  return Buffer.from(encodedKey, "base64");
 }
 
 export function encryptCredential(

@@ -3,13 +3,14 @@ import { ipAddress } from "@vercel/functions";
 import postgres from "postgres";
 import { resolveDatabaseUrl } from "@/lib/db/connection-url";
 
-async function probe(url: string, forceTls = false) {
+async function probe(url: string, forceTls = false, prepare = true) {
   let connection: ReturnType<typeof postgres> | undefined;
   try {
     connection = postgres(url, {
       connect_timeout: 6,
       idle_timeout: 1,
       max: 1,
+      prepare,
       ...(forceTls ? { ssl: "require" as const } : {}),
     });
     const [result] = await connection`
@@ -22,8 +23,18 @@ async function probe(url: string, forceTls = false) {
       error && typeof error === "object" && "code" in error
         ? String(error.code)
         : "unknown";
+    const message = error instanceof Error ? error.message : "";
+    const category =
+      /(?:max(?:imum)?|too many).{0,25}(?:client|connection)|(?:client|connection).{0,25}(?:max(?:imum)?|limit)/i.test(
+        message
+      )
+        ? "connection_limit"
+        : /tenant.{0,30}not found/i.test(message)
+          ? "tenant_not_found"
+          : undefined;
     return {
-      errorCode: /^[A-Z0-9_-]{1,24}$/.test(code) ? code : "unknown",
+      ...(category ? { category } : {}),
+      errorCode: /^[A-Z0-9_-]{1,64}$/.test(code) ? code : "unknown",
       reachable: false,
     };
   } finally {
@@ -63,11 +74,34 @@ export async function GET(request: Request) {
         ...(await probe(url)),
       };
       if (process.env.GRACE_SUPABASE_POOLER_HOST) {
+        const effective = resolveDatabaseUrl(
+          url,
+          process.env.GRACE_SUPABASE_POOLER_HOST
+        );
+        const verified = new URL(effective);
+        verified.searchParams.set("sslmode", "verify-full");
+        const transaction = new URL(effective);
+        transaction.port = "6543";
+        const verifiedTransaction = new URL(transaction);
+        verifiedTransaction.searchParams.set("sslmode", "verify-full");
         database = {
           ...database,
-          effectiveConnection: await probe(
-            resolveDatabaseUrl(url, process.env.GRACE_SUPABASE_POOLER_HOST)
-          ),
+          effectiveConnection: await probe(effective),
+          ...(searchParams.get("verify_tls") === "1"
+            ? {
+                sessionVerified: await probe(verified.toString()),
+                transactionConnection: await probe(
+                  transaction.toString(),
+                  false,
+                  false
+                ),
+                transactionVerified: await probe(
+                  verifiedTransaction.toString(),
+                  false,
+                  false
+                ),
+              }
+            : {}),
         };
       }
       // Only derive fixed Supabase endpoints for the same project and region;

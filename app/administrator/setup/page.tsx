@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { auth } from "@/app/(auth)/auth";
 import { getAdminDatabase } from "@/lib/server/admin/runtime";
+import { isValidCredentialKey } from "@/lib/server/credential-crypto";
 import { BootstrapForm } from "./setup-form";
 
 export default function SetupPage() {
@@ -23,6 +24,20 @@ async function SetupContent() {
         </p>
         <Link className="underline" href="/login">
           Sign in
+        </Link>
+      </main>
+    );
+  }
+  if (!isValidCredentialKey(process.env.GRACE_ENCRYPTION_KEY)) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
+        <h1 className="text-3xl font-semibold">Setup unavailable</h1>
+        <p className="text-muted-foreground">
+          The server encryption key is missing or invalid. An operator must
+          configure a base64-encoded 32-byte key and redeploy before setup.
+        </p>
+        <Link className="underline" href="/administrator">
+          Back to administrator
         </Link>
       </main>
     );
