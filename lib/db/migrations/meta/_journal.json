@@ -127,6 +127,20 @@
       "when": 1793300000016,
       "tag": "0017_grace_usage_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793300000017,
+      "tag": "0018_grace_system_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793300000018,
+      "tag": "0019_grace_attachment_retention",
+      "breakpoints": true
     }
   ]
 }

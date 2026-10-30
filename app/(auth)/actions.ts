@@ -4,7 +4,7 @@ import { ipAddress } from "@vercel/functions";
 import { headers } from "next/headers";
 import { z } from "zod";
 
-import { createUser, getUser } from "@/lib/db/queries";
+import { createUser, getSystemSettings, getUser } from "@/lib/db/queries";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { verifyRegistrationChallenge } from "@/lib/server/security/turnstile";
 
@@ -52,6 +52,7 @@ export type RegisterActionState = {
     | "success"
     | "failed"
     | "user_exists"
+    | "disabled"
     | "invalid_data";
 };
 
@@ -61,6 +62,9 @@ export const register = async (
 ): Promise<RegisterActionState> => {
   try {
     await enforceIpRateLimit(ipAddress(await headers()), "register");
+    if (!(await getSystemSettings()).registrationEnabled) {
+      return { status: "disabled" };
+    }
     const validChallenge = await verifyRegistrationChallenge({
       expectedHost: process.env.AUTH_URL,
       production: process.env.NODE_ENV === "production",

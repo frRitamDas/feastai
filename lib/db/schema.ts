@@ -77,9 +77,19 @@ export const graceAttachment = pgTable("GraceAttachment", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   mediaType: varchar("mediaType", { length: 32 }).notNull(),
   name: varchar("name", { length: 100 }).notNull(),
+  usedAt: timestamp("usedAt", { withTimezone: true }),
   userId: uuid("userId")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
+});
+
+export const graceSystemSetting = pgTable("GraceSystemSetting", {
+  chatEnabled: boolean("chatEnabled").notNull().default(true),
+  id: integer("id").primaryKey().default(1),
+  registrationEnabled: boolean("registrationEnabled").notNull().default(true),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });
 
 export const chat = pgTable("Chat", {
