@@ -1,9 +1,11 @@
+// biome-ignore-all lint/performance/noAwaitInLoops: Rate-limit attempts must be sequential.
 import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
+import { totpCode } from "../../lib/server/admin/totp";
 import { isValidCredentialKey } from "../../lib/server/credential-crypto";
 
 /** Optional browser smoke test; provide a local Chromium executable via env. */
-export async function exerciseBrowser(base: string) {
+export async function exerciseBrowser(base: string, totpSecret: string) {
   const executablePath = process.env.GRACE_BROWSER_EXECUTABLE;
   assert.ok(executablePath, "Chromium executable is required");
   const browser = await chromium.launch({
@@ -156,6 +158,41 @@ export async function exerciseBrowser(base: string) {
         status: 200,
       })
     );
+    // Test-only Turnstile widget. Every reset produces a new single-use token;
+    // the isolated server stub still validates the action, host, and token.
+    await context.route(
+      (url) =>
+        url.hostname === "challenges.cloudflare.com" &&
+        url.pathname === "/turnstile/v0/api.js",
+      (route) =>
+        route.fulfill({
+          body: `(() => {
+            const widgets = new Map();
+            let counter = 0;
+            const complete = (id) => {
+              const params = widgets.get(id);
+              if (params) setTimeout(() => params.callback(
+                'integration-admin-mfa-' + Date.now() + '-' + (++counter)
+              ), 0);
+            };
+            window.turnstile = {
+              render: (_element, params) => {
+                const id = 'widget-' + (++counter);
+                widgets.set(id, params);
+                complete(id);
+                return id;
+              },
+              reset: (id) => complete(id),
+              remove: (id) => widgets.delete(id),
+              getResponse: () => '',
+              isExpired: () => false,
+            };
+            if (window.onloadTurnstileCallback) window.onloadTurnstileCallback();
+          })();`,
+          contentType: "application/javascript",
+          status: 200,
+        })
+    );
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -267,10 +304,122 @@ export async function exerciseBrowser(base: string) {
     await page
       .getByRole("heading", { name: "Administrator verification" })
       .waitFor();
+    const currentStep = Math.floor(Date.now() / 30_000);
+    const nearbyCodes = new Set(
+      [-1, 0, 1, 2].map((offset) => totpCode(totpSecret, currentStep + offset))
+    );
+    const wrongCode = ["000000", "111111", "222222", "333333", "444444"].find(
+      (candidate) => !nearbyCodes.has(candidate)
+    );
+    assert.ok(wrongCode);
+    await page.getByLabel("Authenticator code").fill(wrongCode);
+    const invalidMfa = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/administrator/mfa") &&
+        response.request().method() === "POST"
+    );
+    await page.getByRole("button", { exact: true, name: "Verify" }).click();
+    assert.equal((await invalidMfa).status(), 401);
+    await page
+      .getByRole("alert")
+      .getByText(/Invalid or already used code/)
+      .waitFor();
+
+    // The rejected request consumed its challenge token. The UI must reset the
+    // widget and submit a new one, then open the genuinely authorized panel.
+    await page
+      .getByLabel("Authenticator code")
+      .fill(totpCode(totpSecret, Math.floor(Date.now() / 30_000) + 1));
+    // PGlite's socket fixture has one embedded backend; simultaneous sessions
+    // can interfere with each other's unnamed statements. Queue the browser's
+    // automatic session refresh until the dashboard queries finish.
+    async function holdBrowserSessionRefresh() {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route("**/api/auth/session", async (route) => {
+        await gate;
+        await route.continue();
+      });
+      return async () => {
+        release();
+        await page.unroute("**/api/auth/session");
+      };
+    }
+    let releaseRefresh = await holdBrowserSessionRefresh();
+    const validMfa = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/administrator/mfa") &&
+        response.request().method() === "POST"
+    );
+    await page.getByRole("button", { exact: true, name: "Verify" }).click();
+    assert.equal((await validMfa).status(), 200);
+    try {
+      await page
+        .getByRole("heading", { exact: true, name: "Administrator" })
+        .waitFor({ timeout: 15_000 });
+    } catch (error) {
+      const overview = await page.request.get(
+        `${base}/api/administrator/overview`
+      );
+      console.error("Administrator overview status:", overview.status());
+      console.error(
+        "Administrator screen:",
+        await page.locator("body").innerText()
+      );
+      console.error(
+        "Browser cookie names:",
+        (await context.cookies()).map((cookie) => cookie.name)
+      );
+      throw error;
+    }
+    await page.getByRole("button", { name: "Providers & keys" }).waitFor();
+    await page.getByText("owner", { exact: true }).waitFor();
+    await releaseRefresh();
+    await page.waitForLoadState("networkidle");
+
+    // A real Auth.js session endpoint refresh must not invalidate MFA, even
+    // across a full page reload using production-style secure cookies.
+    const sessionRefresh = await page.request.get(`${base}/api/auth/session`);
+    assert.equal(sessionRefresh.status(), 200);
+    releaseRefresh = await holdBrowserSessionRefresh();
+    await page.reload();
+    await page
+      .getByRole("heading", { exact: true, name: "Administrator" })
+      .waitFor();
+    await page.getByRole("button", { name: "Providers & keys" }).waitFor();
+    await page.getByText("owner", { exact: true }).waitFor();
+    await releaseRefresh();
+    await page.waitForLoadState("networkidle");
+
+    // The unchanged per-hour MFA limit should report an actionable 429 rather
+    // than masquerading as a generic server error.
+    const attempts = await page.evaluate(async (invalid) => {
+      const outcomes: { status: number; error?: string }[] = [];
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const response = await fetch("/api/administrator/mfa", {
+          body: JSON.stringify({
+            challengeToken: `integration-admin-mfa-ratelimit-${attempt}`,
+            code: invalid,
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        });
+        const result = await response.json();
+        outcomes.push({ error: result.error, status: response.status });
+      }
+      return outcomes;
+    }, wrongCode);
+    assert.deepEqual(
+      attempts.map((item) => item.status),
+      [401, 401, 401, 429]
+    );
+    assert.match(attempts.at(-1)?.error ?? "", /wait up to an hour/i);
     assert.deepEqual(errors, [], `browser exceptions: ${errors.join("; ")}`);
     await context.close();
     console.log(
-      "Browser smoke passed: signup, login, local key generation, desktop/mobile chat, private upload and admin verification"
+      "Browser smoke passed: signup, login, local key generation, desktop/mobile chat, private upload, admin MFA and session rotation"
     );
   } finally {
     await browser.close();

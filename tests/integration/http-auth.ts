@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { genSaltSync, hashSync } from "bcrypt-ts";
+import { decode, encode } from "next-auth/jwt";
+import { createAdminProof } from "../../lib/server/admin/session";
 import { totpCode } from "../../lib/server/admin/totp";
 
 async function main() {
@@ -223,6 +225,153 @@ async function main() {
     const replay = await post("mfa", { code });
     assert.equal(replay.status, 401);
     const adminCookies = `${sessionCookie}; ${proof}`;
+    // Auth.js re-encrypts its session cookie when /session is read. A valid
+    // administrator proof must survive that rotation for the SAME session.
+    const refreshedSession = await fetch(`${base}/api/auth/session`, {
+      headers: reqHeaders,
+    });
+    const rotatedCookie = refreshedSession.headers
+      .getSetCookie()
+      .map((cookie) => cookie.split(";")[0])
+      .find((cookie) => cookie.startsWith("authjs.session-token="));
+    assert.ok(rotatedCookie, "Session refresh must rotate the Auth.js cookie");
+    assert.notEqual(rotatedCookie, sessionCookie);
+    const afterSessionRefresh = await fetch(
+      `${base}/api/administrator/overview`,
+      { headers: { Cookie: `${rotatedCookie}; ${proof}`, Origin: base } }
+    );
+    assert.equal(
+      afterSessionRefresh.status,
+      200,
+      "An administrator proof must survive a normal Auth.js session refresh"
+    );
+
+    // A separate login to the SAME account must not inherit another session's
+    // administrator proof, even though both JWTs resolve to the same user.
+    const loginAgain = await fetch(`${base}/api/auth/callback/credentials`, {
+      body: new URLSearchParams({
+        callbackUrl: base,
+        csrfToken: csrf.csrfToken,
+        email: "person@example.com",
+        password: "correct-password",
+      }),
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: initialCookies,
+        Origin: base,
+      },
+      method: "POST",
+      redirect: "manual",
+    });
+    const otherSessionCookie = loginAgain.headers
+      .getSetCookie()
+      .map((cookie) => cookie.split(";")[0])
+      .find((cookie) => cookie.startsWith("authjs.session-token="));
+    assert.ok(otherSessionCookie);
+    const testAuthSecret = "integration-only-auth-secret-32-characters-long";
+    assert.equal(
+      (
+        await fetch(`${base}/api/administrator/overview`, {
+          headers: { Cookie: `${otherSessionCookie}; ${proof}` },
+        })
+      ).status,
+      401,
+      "An administrator proof must not transfer between logins"
+    );
+
+    // A second cookie name cannot substitute a different session for the one
+    // Auth.js actually authenticated on this (HTTP) test origin.
+    const firstClaims = await decode({
+      salt: "authjs.session-token",
+      secret: testAuthSecret,
+      token: sessionCookie.slice("authjs.session-token=".length),
+    });
+    assert.ok(firstClaims);
+    const secureToken = await encode({
+      salt: "__Secure-authjs.session-token",
+      secret: testAuthSecret,
+      token: firstClaims,
+    });
+    assert.equal(
+      (
+        await fetch(`${base}/api/administrator/overview`, {
+          headers: {
+            Cookie: `${otherSessionCookie}; __Secure-authjs.session-token=${secureToken}; ${proof}`,
+          },
+        })
+      ).status,
+      401,
+      "A second cookie name must not switch the authenticated session binding"
+    );
+
+    // Existing deployments have JWTs without the new binding claim. Auth.js'
+    // original jti must be preserved as their binding on the first refresh.
+    const legacyToken = await encode({
+      salt: "authjs.session-token",
+      secret: testAuthSecret,
+      token: { id: owner.id, sessionVersion: 0, type: "regular" },
+    });
+    const legacyClaims = await decode({
+      salt: "authjs.session-token",
+      secret: testAuthSecret,
+      token: legacyToken,
+    });
+    assert.ok(legacyClaims?.jti);
+    const membership = await db.query<{ updatedAt: Date }>(
+      'SELECT "updatedAt" FROM "GraceAdministrator" WHERE "userId" = $1',
+      [owner.id]
+    );
+    const membershipVersion = new Date(
+      membership.rows[0].updatedAt
+    ).toISOString();
+    const legacyProof = `grace_admin_proof=${createAdminProof(
+      owner.id,
+      testAuthSecret,
+      `${membershipVersion}:${legacyClaims.jti}`
+    )}`;
+    const legacyCookie = `authjs.session-token=${legacyToken}`;
+    assert.equal(
+      (
+        await fetch(`${base}/api/administrator/overview`, {
+          headers: { Cookie: `${legacyCookie}; ${legacyProof}` },
+        })
+      ).status,
+      200
+    );
+    const legacyRefresh = await fetch(`${base}/api/auth/session`, {
+      headers: { Cookie: legacyCookie },
+    });
+    const migratedCookie = legacyRefresh.headers
+      .getSetCookie()
+      .map((cookie) => cookie.split(";")[0])
+      .find((cookie) => cookie.startsWith("authjs.session-token="));
+    assert.ok(migratedCookie);
+    assert.equal(
+      (
+        await fetch(`${base}/api/administrator/overview`, {
+          headers: { Cookie: `${migratedCookie}; ${legacyProof}` },
+        })
+      ).status,
+      200,
+      "Existing sessions must preserve their binding during migration"
+    );
+    await db.query(
+      'UPDATE "GraceAdministrator" SET "updatedAt" = "updatedAt" + interval \'1 second\' WHERE "userId" = $1',
+      [owner.id]
+    );
+    assert.equal(
+      (
+        await fetch(`${base}/api/administrator/overview`, {
+          headers: { Cookie: adminCookies },
+        })
+      ).status,
+      401,
+      "A membership change must revoke an administrator proof"
+    );
+    await db.query(
+      'UPDATE "GraceAdministrator" SET "updatedAt" = $2::timestamptz WHERE "userId" = $1',
+      [owner.id, membershipVersion]
+    );
     const create = await post(
       "create-announcement",
       { body: "World", title: "Hello" },

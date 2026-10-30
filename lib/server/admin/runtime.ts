@@ -1,11 +1,12 @@
 import "server-only";
-import { createHash } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { getToken } from "next-auth/jwt";
 import { auth } from "@/app/(auth)/auth";
 import { createCatalogDatabase } from "@/lib/server/catalog/postgres";
 import { type CatalogDatabase, CatalogStore } from "@/lib/server/catalog/store";
 import { isValidCredentialKey } from "@/lib/server/credential-crypto";
 import { verifyAdminProof } from "./session";
+import { sessionBinding } from "./session-binding";
 
 export type AdminRole = "owner" | "operator" | "viewer";
 export type Administrator = {
@@ -44,24 +45,48 @@ export async function getAdminIdentity(): Promise<Administrator | null> {
   }
   return record;
 }
-/** Bind the short-lived proof to the current Auth.js session cookie. */
+/** Bind the proof to the authenticated login, not its rotating JWT ciphertext. */
 export async function adminProofVersion(
   admin: Administrator
 ): Promise<string | null> {
-  const jar = await cookies();
-  const pieces = jar
-    .getAll()
-    .filter((cookie) =>
-      /^(?:__Secure-)?authjs\.session-token(?:\.\d+)?$/.test(cookie.name)
-    )
-    .sort((a, b) => a.name.localeCompare(b.name));
-  if (!pieces.length) {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret || secret.length < 32) {
     return null;
   }
-  const binding = createHash("sha256")
-    .update(pieces.map((piece) => `${piece.name}=${piece.value}`).join(";"))
-    .digest("base64url");
-  return `${new Date(admin.updatedAt).toISOString()}:${binding}`;
+  const requestHeaders = await headers();
+  const authUrl = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL;
+  let secure: boolean;
+  try {
+    // Match Auth.js' default cookie selection, even if both cookie names are
+    // present, so a different login cannot be substituted for the checked one.
+    secure = authUrl
+      ? new URL(authUrl).protocol === "https:"
+      : (requestHeaders.get("x-forwarded-proto") ?? "https").replace(
+          /:$/,
+          ""
+        ) === "https";
+  } catch {
+    return null;
+  }
+  const cookieName = secure
+    ? "__Secure-authjs.session-token"
+    : "authjs.session-token";
+  // Do not accept the Authorization-header fallback that getToken supports:
+  // the proof must be tied to the same browser cookie checked by auth().
+  const cookieHeader = requestHeaders.get("cookie") ?? "";
+  const token = await getToken({
+    cookieName,
+    req: { headers: new Headers({ cookie: cookieHeader }) },
+    secret,
+    secureCookie: secure,
+  });
+  if (!token || token.id !== admin.userId || token.type !== "regular") {
+    return null;
+  }
+  const binding = sessionBinding(token);
+  return binding
+    ? `${new Date(admin.updatedAt).toISOString()}:${binding}`
+    : null;
 }
 export async function authorizedAdmin(): Promise<Administrator | null> {
   const admin = await getAdminIdentity();

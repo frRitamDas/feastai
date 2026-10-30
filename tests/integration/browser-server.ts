@@ -46,6 +46,7 @@ async function main() {
     await db.exec(await readFile(`lib/db/migrations/${migration}.sql`, "utf8"));
   }
   const encryptionKey = Buffer.alloc(32, 42).toString("base64");
+  const totpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
   const [owner] = (
     await db.query<{ id: string }>(
       'INSERT INTO "User" ("email", "password") VALUES ($1, $2) RETURNING "id"',
@@ -57,11 +58,7 @@ async function main() {
     [
       owner.id,
       JSON.stringify(
-        encryptCredential(
-          "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-          `admin:${owner.id}`,
-          encryptionKey
-        )
+        encryptCredential(totpSecret, `admin:${owner.id}`, encryptionKey)
       ),
     ]
   );
@@ -176,7 +173,7 @@ async function main() {
     }
     assert.ok(ready, `Server did not start: ${logs}`);
     try {
-      await exerciseBrowser(base);
+      await exerciseBrowser(base, totpSecret);
     } catch (error) {
       const counters = await db.query(
         `SELECT split_part("key", ':', 1) AS scope, count(*)::int AS rows FROM "GraceRateLimit" GROUP BY 1`

@@ -3,7 +3,6 @@
 "use client";
 
 import { Turnstile, type TurnstileInstance } from "@marsidev/react-turnstile";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,9 +112,10 @@ const sections = [
 ] as const;
 
 export function AdminConsole({ verified }: { verified: boolean }) {
-  const router = useRouter();
   const [code, setCode] = useState("");
   const [challengeToken, setChallengeToken] = useState("");
+  const [challengeError, setChallengeError] = useState("");
+  const [mfaOpening, setMfaOpening] = useState(false);
   const challengeRef = useRef<TurnstileInstance>(null);
   const [section, setSection] =
     useState<(typeof sections)[number]>("Dashboard");
@@ -186,7 +186,10 @@ export function AdminConsole({ verified }: { verified: boolean }) {
         );
       }
       if (name === "mfa") {
-        router.refresh();
+        setMfaOpening(true);
+        // A full request reads the newly set HttpOnly proof rather than a
+        // cached partial navigation of the verification screen.
+        window.location.reload();
       } else {
         await refresh();
       }
@@ -222,19 +225,37 @@ export function AdminConsole({ verified }: { verified: boolean }) {
             }
           }}
         >
-          <Input
-            autoComplete="one-time-code"
-            inputMode="numeric"
-            maxLength={6}
-            onChange={(event) => setCode(event.target.value)}
-            placeholder="000000"
-            value={code}
-          />
+          <label className="block space-y-2 text-sm" htmlFor="admin-code">
+            <span>Authenticator code</span>
+            <Input
+              autoComplete="one-time-code"
+              id="admin-code"
+              inputMode="numeric"
+              onChange={(event) =>
+                setCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              placeholder="000000"
+              value={code}
+            />
+          </label>
           {process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY ? (
             <Turnstile
-              onError={() => setChallengeToken("")}
-              onExpire={() => setChallengeToken("")}
-              onSuccess={setChallengeToken}
+              onError={() => {
+                setChallengeToken("");
+                setChallengeError(
+                  "The security check could not load. Please try again."
+                );
+              }}
+              onExpire={() => {
+                setChallengeToken("");
+                setChallengeError(
+                  "The security check expired. Please complete it again."
+                );
+              }}
+              onSuccess={(token) => {
+                setChallengeToken(token);
+                setChallengeError("");
+              }}
               options={{ action: "admin-mfa" }}
               ref={challengeRef}
               siteKey={process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY}
@@ -244,17 +265,41 @@ export function AdminConsole({ verified }: { verified: boolean }) {
               Administrator verification is unavailable.
             </p>
           ) : null}
+          {process.env.NODE_ENV === "production" &&
+            process.env.NEXT_PUBLIC_GRACE_TURNSTILE_SITE_KEY &&
+            !challengeToken &&
+            !mfaOpening && (
+              <p className="text-sm text-muted-foreground" role="status">
+                Complete the security check to continue.
+              </p>
+            )}
           <Button
             disabled={
               busy ||
+              mfaOpening ||
               code.length !== 6 ||
               (process.env.NODE_ENV === "production" && !challengeToken)
             }
             type="submit"
           >
-            Verify
+            {busy ? "Verifying…" : "Verify"}
           </Button>
         </form>
+        {Boolean(mfaOpening) && (
+          <div className="space-y-3" role="status">
+            <p className="text-sm text-muted-foreground">
+              Code accepted. Opening the administrator dashboard…
+            </p>
+            <Button onClick={() => window.location.reload()} variant="outline">
+              Reload dashboard
+            </Button>
+          </div>
+        )}
+        {Boolean(challengeError) && (
+          <p className="text-sm text-destructive" role="alert">
+            {challengeError}
+          </p>
+        )}
         {Boolean(error) && (
           <p className="text-sm text-destructive" role="alert">
             {error}

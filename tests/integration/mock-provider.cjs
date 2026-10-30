@@ -3,6 +3,7 @@
 // Test-process-only provider stub. Never loaded by the production application.
 const originalFetch = globalThis.fetch;
 let firstProviderFailed = false;
+const usedChallengeTokens = new Set();
 globalThis.fetch = async (input, init) => {
   const url = String(input);
   // Explicitly enabled only in the isolated browser fixture. This never runs
@@ -12,13 +13,19 @@ globalThis.fetch = async (input, init) => {
     url === "https://challenges.cloudflare.com/turnstile/v0/siteverify"
   ) {
     const body = new URLSearchParams(init?.body);
-    return Response.json({
-      action: "register",
-      hostname: "localhost",
-      success:
-        body.get("secret") === "integration-only-turnstile-secret" &&
-        body.get("response") === "integration-valid-challenge",
-    });
+    const token = body.get("response") ?? "";
+    const action = token.startsWith("integration-admin-mfa-")
+      ? "admin-mfa"
+      : "register";
+    const valid =
+      body.get("secret") === "integration-only-turnstile-secret" &&
+      (token === "integration-valid-challenge" ||
+        /^integration-admin-mfa-[a-z0-9-]+$/.test(token)) &&
+      !usedChallengeTokens.has(token);
+    if (valid) {
+      usedChallengeTokens.add(token);
+    }
+    return Response.json({ action, hostname: "localhost", success: valid });
   }
   if (url.startsWith("https://api.groq.com/openai/v1/")) {
     if (url.endsWith("/models")) {

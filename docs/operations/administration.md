@@ -1,6 +1,6 @@
 # Administrator operations
 
-The console at `/administrator` is deliberately absent from public navigation. It uses a regular Auth.js account, server-side membership, TOTP MFA, and a production Turnstile challenge. Administrator proofs expire after ten minutes and are bound to the authenticated session and membership version. Each API independently checks role and proof, mutations require the same origin, and TOTP counters prevent reuse.
+The console at `/administrator` is deliberately absent from public navigation. It uses a regular Auth.js account, server-side membership, TOTP MFA, and a production Turnstile challenge. Administrator proofs expire after ten minutes and are bound to a random per-login session identifier and membership version; normal Auth.js cookie rotation does not invalidate them, but a separate login cannot reuse them. Each API independently checks role and proof, mutations require the same origin, and TOTP counters prevent reuse. A rejected MFA submission resets the single-use challenge; wait for a fresh authenticator code after using one. If rate-limited, wait up to an hour before trying again.
 
 ## Prepare production
 

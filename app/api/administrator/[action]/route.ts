@@ -1,6 +1,7 @@
 import { ipAddress } from "@vercel/functions";
 import { cookies } from "next/headers";
 import { z } from "zod";
+import { ChatbotError } from "@/lib/errors";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { bootstrapAdministrator } from "@/lib/server/admin/bootstrap";
 import {
@@ -176,7 +177,13 @@ export async function POST(request: Request, context: Context) {
       });
       if (!challengeAccepted) {
         await audit(identity.userId, "mfa-challenge", null, "denied");
-        return reply({ error: "Invalid verification" }, 401);
+        return reply(
+          {
+            error:
+              "Security check failed or expired. Please complete it again.",
+          },
+          401
+        );
       }
       const db = getAdminDatabase();
       const accepted = await db.transaction(async (tx) => {
@@ -214,11 +221,22 @@ export async function POST(request: Request, context: Context) {
         return true;
       });
       if (!accepted) {
-        return reply({ error: "Invalid verification" }, 401);
+        return reply(
+          {
+            error:
+              "Invalid or already used code. Wait for a new code and try again.",
+          },
+          401
+        );
       }
       const proofVersion = await adminProofVersion(identity);
       if (!proofVersion) {
-        return reply({ error: "Invalid session" }, 401);
+        return reply(
+          {
+            error: "Session could not be verified. Sign out and sign in again.",
+          },
+          401
+        );
       }
       (await cookies()).set(
         "grace_admin_proof",
@@ -532,7 +550,16 @@ export async function POST(request: Request, context: Context) {
     }
     await audit(admin.userId, action, target, "success");
     return reply(result);
-  } catch {
+  } catch (error) {
+    if (error instanceof ChatbotError && error.type === "rate_limit") {
+      return reply(
+        {
+          error:
+            "Too many administrator requests. Please wait up to an hour and try again.",
+        },
+        429
+      );
+    }
     return reply({ error: "Administrator action failed" }, 503);
   }
 }

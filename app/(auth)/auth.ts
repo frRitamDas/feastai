@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { ipAddress } from "@vercel/functions";
 import { compare } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
@@ -10,6 +11,7 @@ import {
   getUserSessionState,
 } from "@/lib/db/queries";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
+import { sessionBinding } from "@/lib/server/admin/session-binding";
 import { authConfig } from "./auth.config";
 
 export type UserType = "guest" | "regular";
@@ -32,6 +34,7 @@ declare module "next-auth" {
 
 declare module "next-auth/jwt" {
   interface JWT extends DefaultJWT {
+    graceSessionBinding?: string;
     id: string;
     sessionVersion?: number;
     type: UserType;
@@ -50,6 +53,14 @@ export const {
       if (user) {
         token.id = user.id as string;
         token.type = user.type;
+        token.graceSessionBinding = randomUUID();
+      } else if (!token.graceSessionBinding) {
+        // Migrate older sessions from their original Auth.js jti. Once saved
+        // in the refreshed JWT, this value no longer changes on refresh.
+        const binding = sessionBinding(token);
+        if (binding) {
+          token.graceSessionBinding = binding;
+        }
       }
 
       if (!token.id) {

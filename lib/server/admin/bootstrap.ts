@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { ipAddress } from "@vercel/functions";
 import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
+import { ChatbotError } from "@/lib/errors";
 import { enforceIpRateLimit } from "@/lib/ratelimit";
 import {
   encryptCredential,
@@ -102,7 +103,13 @@ export async function bootstrapAdministrator(request: Request) {
       return reply("Administrator setup is no longer available.", 409);
     }
     return Response.json({ ok: true }, { headers });
-  } catch {
+  } catch (error) {
+    if (error instanceof ChatbotError && error.type === "rate_limit") {
+      return reply(
+        "Too many administrator requests. Please wait up to an hour and try again.",
+        429
+      );
+    }
     return reply("Administrator setup is unavailable.", 503);
   }
 }
