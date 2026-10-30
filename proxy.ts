@@ -10,6 +10,12 @@ export async function proxy(request: NextRequest) {
     return new Response("pong", { status: 200 });
   }
 
+  // This self-contained page generates an operator key locally and contains no
+  // account data. It must be reachable even when guest provisioning is down.
+  if (pathname === "/operator-key-generator.html") {
+    return NextResponse.next();
+  }
+
   if (
     pathname.startsWith("/api/administrator/") ||
     pathname.startsWith("/administrator") ||

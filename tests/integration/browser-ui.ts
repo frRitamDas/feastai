@@ -14,6 +14,13 @@ export async function exerciseBrowser(base: string) {
     // Failure to provision a guest must never block access to account pages.
     const noIpContext = await browser.newContext({ ignoreHTTPSErrors: true });
     const noIpPage = await noIpContext.newPage();
+    const generator = await noIpPage.goto(
+      `${base}/operator-key-generator.html`
+    );
+    assert.equal(generator?.status(), 200);
+    await noIpPage
+      .getByRole("heading", { name: "Create an encryption key" })
+      .waitFor();
     const signup = await noIpPage.goto(`${base}/register`);
     assert.equal(signup?.status(), 200);
     await noIpPage.getByRole("heading", { name: "Create account" }).waitFor();
