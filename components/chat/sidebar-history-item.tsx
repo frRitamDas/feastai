@@ -1,5 +1,18 @@
+import { DownloadIcon, PencilIcon } from "lucide-react";
 import Link from "next/link";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Chat } from "@/lib/db/schema";
 import {
@@ -30,13 +43,80 @@ const PureChatItem = ({
   chat,
   isActive,
   onDelete,
+  onRenamed,
   setOpenMobile,
 }: {
   chat: Chat;
   isActive: boolean;
   onDelete: (chatId: string) => void;
+  onRenamed: (chatId: string, title: string) => void;
   setOpenMobile: (open: boolean) => void;
 }) => {
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [title, setTitle] = useState(chat.title);
+  const [saving, setSaving] = useState(false);
+
+  const openRename = useCallback(() => {
+    setTitle(chat.title);
+    setRenameOpen(true);
+  }, [chat.title]);
+  const closeRename = useCallback(() => setRenameOpen(false), []);
+  const changeTitle = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) =>
+      setTitle(event.target.value),
+    []
+  );
+
+  const handleRename = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmed = title.trim();
+    if (!trimmed || trimmed.length > 120 || saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/conversations/${chat.id}`,
+        {
+          body: JSON.stringify({ title: trimmed }),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        }
+      );
+      if (!response.ok) {
+        throw new Error("Rename failed");
+      }
+      onRenamed(chat.id, trimmed);
+      setRenameOpen(false);
+      toast.success("Conversation renamed");
+    } catch {
+      toast.error("Could not rename the conversation. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/conversations/${chat.id}`
+      );
+      if (!response.ok) {
+        throw new Error("Export failed");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `grace-conversation-${chat.id}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Conversation exported");
+    } catch {
+      toast.error("Could not export the conversation. Try again.");
+    }
+  };
+
   const { visibilityType, setVisibilityType } = useChatVisibility({
     chatId: chat.id,
     initialVisibilityType: chat.visibility,
@@ -114,18 +194,62 @@ const PureChatItem = ({
             </DropdownMenuPortal>
           </DropdownMenuSub>
 
+          <DropdownMenuItem onSelect={openRename}>
+            <PencilIcon /> <span>Rename</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleExport}>
+            <DownloadIcon /> <span>Export JSON</span>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={handleDelete} variant="destructive">
             <TrashIcon />
             <span>Delete</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Dialog onOpenChange={setRenameOpen} open={renameOpen}>
+        <DialogContent>
+          <form onSubmit={handleRename}>
+            <DialogHeader>
+              <DialogTitle>Rename conversation</DialogTitle>
+              <DialogDescription>
+                Choose a title that helps you find this conversation later.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="my-5 space-y-2">
+              <Label htmlFor={`rename-${chat.id}`}>Conversation title</Label>
+              <Input
+                id={`rename-${chat.id}`}
+                maxLength={120}
+                onChange={changeTitle}
+                required
+                value={title}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                disabled={saving}
+                onClick={closeRename}
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button disabled={saving || !title.trim()} type="submit">
+                {saving ? "Saving…" : "Save title"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </SidebarMenuItem>
   );
 };
 
 export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
-  if (prevProps.isActive !== nextProps.isActive) {
+  if (
+    prevProps.isActive !== nextProps.isActive ||
+    prevProps.chat.title !== nextProps.chat.title
+  ) {
     return false;
   }
   return true;

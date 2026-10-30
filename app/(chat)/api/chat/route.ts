@@ -33,6 +33,7 @@ import {
   getChatById,
   getMessageCountByUserId,
   getMessagesByChatId,
+  recordUsage,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -40,7 +41,12 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
-import { checkIpRateLimit } from "@/lib/ratelimit";
+import { enforceIpRateLimit } from "@/lib/ratelimit";
+import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
+import { isSameOrigin } from "@/lib/server/conversations/authorization";
+import { createFallbackModel } from "@/lib/server/providers/fallback";
+import { readLimitedJson } from "@/lib/server/security/read-limited-json";
+import { mergeToolApprovals } from "@/lib/server/security/tool-approvals";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -70,7 +76,7 @@ export async function POST(request: Request) {
   let requestBody: PostRequestBody;
 
   try {
-    const json = await request.json();
+    const json = await readLimitedJson(request, 1_000_000);
     requestBody = postRequestBodySchema.parse(json);
   } catch {
     return new ChatbotError("bad_request:api").toResponse();
@@ -93,15 +99,58 @@ export async function POST(request: Request) {
       return new ChatbotError("unauthorized:chat").toResponse();
     }
 
-    if (!allowedModelIds.has(selectedChatModel)) {
+    await enforceIpRateLimit(ipAddress(request), "chat");
+    if (
+      isProductionEnvironment &&
+      message?.parts.some((part) => part.type === "file")
+    ) {
       return new ChatbotError(
         "bad_request:api",
-        "The selected model is unavailable. Choose another model and try again."
+        "Attachments are temporarily unavailable."
       ).toResponse();
     }
+    let sharedModels: Awaited<
+      ReturnType<
+        NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolveCandidates"]
+      >
+    > = [];
+    if (
+      selectedChatModel.startsWith("grace/") ||
+      selectedChatModel.startsWith("auto/")
+    ) {
+      const catalog = getRuntimeCatalog();
+      const isAutomatic = selectedChatModel.startsWith("auto/");
+      const modelId = selectedChatModel.slice(
+        isAutomatic ? "auto/".length : "grace/".length
+      );
+      if (
+        !catalog ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          modelId
+        )
+      ) {
+        return new ChatbotError(
+          "bad_request:api",
+          "The selected model is unavailable."
+        ).toResponse();
+      }
+      sharedModels = isAutomatic
+        ? await catalog.resolveRouteCandidates(modelId)
+        : await catalog.resolveCandidates(modelId);
+      if (!sharedModels.length) {
+        return new ChatbotError(
+          "bad_request:api",
+          "The selected model is unavailable."
+        ).toResponse();
+      }
+    } else if (!allowedModelIds.has(selectedChatModel)) {
+      return new ChatbotError(
+        "bad_request:api",
+        "The selected model is unavailable."
+      ).toResponse();
+    }
+    const [sharedModel] = sharedModels;
     const chatModel = selectedChatModel;
-
-    await checkIpRateLimit(ipAddress(request));
 
     const userType: UserType = session.user.type;
 
@@ -110,7 +159,7 @@ export async function POST(request: Request) {
       id: session.user.id,
     });
 
-    if (messageCount > entitlementsByUserType[userType].maxMessagesPerHour) {
+    if (messageCount >= entitlementsByUserType[userType].maxMessagesPerHour) {
       return new ChatbotError("rate_limit:chat").toResponse();
     }
 
@@ -138,39 +187,50 @@ export async function POST(request: Request) {
     let uiMessages: ChatMessage[];
 
     if (isToolApprovalFlow && messages) {
-      const dbMessages = convertToUIMessages(messagesFromDb);
-      const approvalStates = new Map(
-        messages.flatMap(
-          (m) =>
-            m.parts
-              ?.filter(
-                (p: Record<string, unknown>) =>
-                  p.state === "approval-responded" ||
-                  p.state === "output-denied"
-              )
-              .map((p: Record<string, unknown>) => [
-                String(p.toolCallId ?? ""),
-                p,
-              ]) ?? []
-        )
+      const merged = mergeToolApprovals(
+        convertToUIMessages(messagesFromDb),
+        messages
       );
-      uiMessages = dbMessages.map((msg) => ({
-        ...msg,
-        parts: msg.parts.map((part) => {
-          if (
-            "toolCallId" in part &&
-            approvalStates.has(String(part.toolCallId))
-          ) {
-            return { ...part, ...approvalStates.get(String(part.toolCallId)) };
-          }
-          return part;
-        }),
-      })) as ChatMessage[];
+      if (!merged) {
+        return new ChatbotError(
+          "bad_request:api",
+          "No matching pending approval."
+        ).toResponse();
+      }
+      uiMessages = merged;
     } else {
       uiMessages = [
         ...convertToUIMessages(messagesFromDb),
         message as ChatMessage,
       ];
+    }
+
+    if (
+      isProductionEnvironment &&
+      uiMessages.some((item) => item.parts.some((part) => part.type === "file"))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "Conversations with attachments are temporarily unavailable."
+      ).toResponse();
+    }
+
+    if (
+      sharedModel &&
+      (isToolApprovalFlow ||
+        uiMessages.some((item) =>
+          item.parts.some(
+            (part) =>
+              part.type === "file" ||
+              part.type === "dynamic-tool" ||
+              part.type.startsWith("tool-")
+          )
+        ))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "This model currently supports text-only conversations without tools."
+      ).toResponse();
     }
 
     const { longitude, latitude, city, country } = geolocation(request);
@@ -271,7 +331,7 @@ export async function POST(request: Request) {
 
         const result = streamText({
           activeTools:
-            isReasoningModel && !supportsTools
+            sharedModel || (isReasoningModel && !supportsTools)
               ? []
               : [
                   "getWeather",
@@ -282,7 +342,18 @@ export async function POST(request: Request) {
                 ],
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
-          model: getLanguageModel(chatModel),
+          model: sharedModel
+            ? createFallbackModel(sharedModels)
+            : getLanguageModel(chatModel),
+          ...(sharedModel
+            ? {
+                abortSignal: AbortSignal.any([
+                  request.signal,
+                  AbortSignal.timeout(55_000),
+                ]),
+                maxRetries: 0,
+              }
+            : {}),
           onAbort() {
             stopWaitingStatus();
           },
@@ -291,8 +362,20 @@ export async function POST(request: Request) {
               markModelActive();
             }
           },
-          onEnd() {
+          async onEnd({ callId, usage }) {
             stopWaitingStatus();
+            try {
+              await recordUsage({
+                callId,
+                chatId: id,
+                inputTokens: usage.inputTokens,
+                model: chatModel,
+                outputTokens: usage.outputTokens,
+                userId: session.user.id,
+              });
+            } catch {
+              console.error("Unable to record generation usage");
+            }
           },
           onError() {
             stopWaitingStatus();
@@ -448,6 +531,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  if (!isSameOrigin(request.url, request.headers.get("origin"))) {
+    return Response.json({ error: "Invalid request origin" }, { status: 403 });
+  }
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
 

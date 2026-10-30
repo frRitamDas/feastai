@@ -1,48 +1,32 @@
-import { createClient } from "redis";
-
 import { isProductionEnvironment } from "@/lib/constants";
+import { incrementRateLimit } from "@/lib/db/queries";
 import { ChatbotError } from "@/lib/errors";
+import {
+  checkRateLimit,
+  type RateLimitScope,
+} from "@/lib/server/security/rate-limit";
 
-const MAX_MESSAGES = 10;
-const TTL_SECONDS = 60 * 60;
-
-let client: ReturnType<typeof createClient> | null = null;
-
-function getClient() {
-  if (!client && process.env.REDIS_URL) {
-    client = createClient({ url: process.env.REDIS_URL });
-    client.on("error", () => undefined);
-    client.connect().catch(() => {
-      client = null;
-    });
-  }
-  return client;
-}
-
-export async function checkIpRateLimit(ip: string | undefined) {
-  if (!isProductionEnvironment || !ip) {
+/** Production fails closed when identity, secret, or the counter is unavailable. */
+export async function enforceIpRateLimit(
+  ip: string | undefined,
+  scope: RateLimitScope
+) {
+  if (!isProductionEnvironment) {
     return;
   }
-
-  const redis = getClient();
-  if (!redis?.isReady) {
-    return;
-  }
-
+  let allowed: boolean;
   try {
-    const key = `ip-rate-limit:${ip}`;
-    const [count] = await redis
-      .multi()
-      .incr(key)
-      .expire(key, TTL_SECONDS, "NX")
-      .exec();
-
-    if (typeof count === "number" && count > MAX_MESSAGES) {
-      throw new ChatbotError("rate_limit:chat");
-    }
-  } catch (error) {
-    if (error instanceof ChatbotError) {
-      throw error;
-    }
+    allowed = await checkRateLimit({
+      increment: incrementRateLimit,
+      ip,
+      scope,
+      secret: process.env.AUTH_SECRET,
+    });
+  } catch {
+    // biome-ignore lint/style/useErrorCause: database errors can contain sensitive connection details
+    throw new ChatbotError("offline:chat");
+  }
+  if (!allowed) {
+    throw new ChatbotError("rate_limit:chat");
   }
 }

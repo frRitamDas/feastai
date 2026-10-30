@@ -1,8 +1,11 @@
 "use server";
 
+import { ipAddress } from "@vercel/functions";
+import { headers } from "next/headers";
 import { z } from "zod";
 
 import { createUser, getUser } from "@/lib/db/queries";
+import { enforceIpRateLimit } from "@/lib/ratelimit";
 
 import { signIn } from "./auth";
 
@@ -56,6 +59,7 @@ export const register = async (
   formData: FormData
 ): Promise<RegisterActionState> => {
   try {
+    await enforceIpRateLimit(ipAddress(await headers()), "register");
     const validatedData = authFormSchema.parse({
       email: formData.get("email"),
       password: formData.get("password"),

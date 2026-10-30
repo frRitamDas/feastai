@@ -9,6 +9,16 @@ export async function proxy(request: NextRequest) {
     return new Response("pong", { status: 200 });
   }
 
+  if (
+    pathname.startsWith("/api/administrator/") ||
+    pathname.startsWith("/administrator") ||
+    pathname.startsWith("/api/conversations/") ||
+    pathname === "/api/history/search"
+  ) {
+    // These endpoints return their own 401/404 instead of creating a guest.
+    return NextResponse.next();
+  }
+
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
   }

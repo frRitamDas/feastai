@@ -325,6 +325,9 @@ function PureMultimodalInput({
 
   const handlePaste = useCallback(
     async (event: ClipboardEvent) => {
+      if (process.env.NODE_ENV === "production") {
+        return;
+      }
       const items = event.clipboardData?.items;
       if (!items) {
         return;
@@ -545,11 +548,13 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
-            <AttachmentsButton
-              fileInputRef={fileInputRef}
-              selectedModelId={selectedModelId}
-              status={status}
-            />
+            {process.env.NODE_ENV !== "production" && (
+              <AttachmentsButton
+                fileInputRef={fileInputRef}
+                selectedModelId={selectedModelId}
+                status={status}
+              />
+            )}
             <ModelSelectorCompact
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
@@ -647,7 +652,7 @@ function PureAttachmentsButton({
   const { data: modelsResponse } = useSWR(
     `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
     (url: string) => fetch(url).then((r) => r.json()),
-    { dedupingInterval: 3_600_000, revalidateOnFocus: false }
+    { dedupingInterval: 60_000, revalidateOnFocus: true }
   );
 
   const caps: Record<string, ModelCapabilities> | undefined =
@@ -794,7 +799,7 @@ function PureModelSelectorCompact({
   const { data: modelsData } = useSWR(
     `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
     (url: string) => fetch(url).then((r) => r.json()),
-    { dedupingInterval: 3_600_000, revalidateOnFocus: false }
+    { dedupingInterval: 60_000, revalidateOnFocus: true }
   );
 
   const capabilities: Record<string, ModelCapabilities> | undefined =
@@ -824,11 +829,16 @@ function PureModelSelectorCompact({
         <ModelSelectorInput placeholder="Search models..." />
         <ModelSelectorList>
           {(() => {
-            const curatedIds = new Set(chatModels.map((m) => m.id));
+            const curatedIds = new Set([
+              ...chatModels.map((m) => m.id),
+              ...(modelsData?.eligibleModelIds ?? []),
+            ]);
             const allModels = dynamicModels
               ? [
                   ...chatModels,
-                  ...dynamicModels.filter((m) => !curatedIds.has(m.id)),
+                  ...dynamicModels.filter(
+                    (m) => !chatModels.some((curated) => curated.id === m.id)
+                  ),
                 ]
               : chatModels;
 

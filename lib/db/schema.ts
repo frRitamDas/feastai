@@ -1,12 +1,17 @@
 import type { InferSelectModel } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   foreignKey,
+  index,
+  integer,
   json,
+  jsonb,
   pgTable,
   primaryKey,
   text,
   timestamp,
+  unique,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -134,3 +139,172 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+// Server-managed catalog. A discovered listing is not proof of inference access.
+export const graceProviderKey = pgTable(
+  "GraceProviderKey",
+  {
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    discoveryStatus: varchar("discoveryStatus", { length: 32 })
+      .notNull()
+      .default("pending"),
+    enabled: boolean("enabled").notNull().default(false),
+    encryptedCredential: jsonb("encryptedCredential").notNull(),
+    id: uuid("id").primaryKey().notNull(),
+    label: varchar("label", { length: 100 }).notNull(),
+    lastDiscoveryAt: timestamp("lastDiscoveryAt", { withTimezone: true }),
+    priority: integer("priority").notNull().default(50),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({ identity: unique().on(table.id, table.provider) })
+);
+
+export const graceModel = pgTable(
+  "GraceModel",
+  {
+    enabled: boolean("enabled").notNull().default(false),
+    firstDiscoveredAt: timestamp("firstDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    id: uuid("id").primaryKey().notNull().defaultRandom(),
+    lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    name: varchar("name", { length: 300 }).notNull(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    upstreamId: varchar("upstreamId", { length: 300 }).notNull(),
+  },
+  (table) => ({
+    identity: unique().on(table.id, table.provider),
+    upstream: unique().on(table.provider, table.upstreamId),
+  })
+);
+
+export const graceKeyModel = pgTable(
+  "GraceKeyModel",
+  {
+    available: boolean("available").notNull().default(false),
+    keyId: uuid("keyId").notNull(),
+    lastCheckAt: timestamp("lastCheckAt", { withTimezone: true }),
+    lastCheckStatus: varchar("lastCheckStatus", { length: 32 }),
+    lastDiscoveredAt: timestamp("lastDiscoveredAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastLatencyMs: integer("lastLatencyMs"),
+    modelId: uuid("modelId").notNull(),
+    permitted: boolean("permitted").notNull().default(false),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    verifiedAt: timestamp("verifiedAt", { withTimezone: true }),
+  },
+  (table) => ({
+    keyRef: foreignKey({
+      columns: [table.keyId, table.provider],
+      foreignColumns: [graceProviderKey.id, graceProviderKey.provider],
+    }).onDelete("cascade"),
+    lookup: index("grace_key_model_lookup").on(table.modelId, table.permitted),
+    modelRef: foreignKey({
+      columns: [table.modelId, table.provider],
+      foreignColumns: [graceModel.id, graceModel.provider],
+    }).onDelete("cascade"),
+    pk: primaryKey({ columns: [table.keyId, table.modelId] }),
+  })
+);
+
+export const graceRateLimit = pgTable(
+  "GraceRateLimit",
+  {
+    count: integer("count").notNull(),
+    key: text("key").primaryKey(),
+    windowStart: timestamp("windowStart", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    expiry: index("GraceRateLimit_windowStart_idx").on(table.windowStart),
+  })
+);
+
+export const graceAdministrator = pgTable("GraceAdministrator", {
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  enabled: boolean("enabled").notNull().default(true),
+  lastTotpStep: bigint("lastTotpStep", { mode: "number" })
+    .notNull()
+    .default(-1),
+  role: varchar("role", { length: 16 }).notNull(),
+  totpSecret: jsonb("totpSecret").notNull(),
+  updatedAt: timestamp("updatedAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => user.id),
+});
+
+export const graceAdminAudit = pgTable(
+  "GraceAdminAudit",
+  {
+    action: varchar("action", { length: 64 }).notNull(),
+    actorId: uuid("actorId")
+      .notNull()
+      .references(() => user.id),
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    id: uuid("id").primaryKey().defaultRandom(),
+    outcome: varchar("outcome", { length: 24 }).notNull(),
+    target: varchar("target", { length: 128 }),
+  },
+  (table) => ({
+    created: index("GraceAdminAudit_createdAt_idx").on(table.createdAt.desc()),
+  })
+);
+
+export const graceUsageEvent = pgTable(
+  "GraceUsageEvent",
+  {
+    callId: text("callId").primaryKey(),
+    chatId: uuid("chatId").references(() => chat.id, { onDelete: "set null" }),
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    inputTokens: integer("inputTokens"),
+    model: varchar("model", { length: 300 }).notNull(),
+    outputTokens: integer("outputTokens"),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => ({
+    created: index("GraceUsageEvent_createdAt_idx").on(table.createdAt.desc()),
+  })
+);
+
+export const graceRouteGroup = pgTable("GraceRouteGroup", {
+  createdAt: timestamp("createdAt", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  enabled: boolean("enabled").notNull().default(false),
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 100 }).notNull(),
+});
+
+export const graceRouteMember = pgTable(
+  "GraceRouteMember",
+  {
+    modelId: uuid("modelId")
+      .notNull()
+      .references(() => graceModel.id, { onDelete: "cascade" }),
+    priority: integer("priority").notNull().default(50),
+    routeId: uuid("routeId")
+      .notNull()
+      .references(() => graceRouteGroup.id, { onDelete: "cascade" }),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.routeId, table.modelId] }) })
+);

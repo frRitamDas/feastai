@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/app/(auth)/auth";
+import { isProductionEnvironment } from "@/lib/constants";
 
 const FileSchema = z.object({
   file: z
@@ -16,6 +17,12 @@ const FileSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  if (isProductionEnvironment) {
+    return NextResponse.json(
+      { error: "Attachments are temporarily unavailable." },
+      { status: 503 }
+    );
+  }
   const session = await auth();
 
   if (!session) {

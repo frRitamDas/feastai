@@ -1,9 +1,11 @@
+import { ipAddress } from "@vercel/functions";
 import { compare } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import { createGuestUser, getUser } from "@/lib/db/queries";
+import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { authConfig } from "./auth.config";
 
 export type UserType = "guest" | "regular";
@@ -57,7 +59,8 @@ export const {
   },
   providers: [
     Credentials({
-      async authorize(credentials) {
+      async authorize(credentials, request) {
+        await enforceIpRateLimit(ipAddress(request), "login");
         const email = String(credentials.email ?? "");
         const password = String(credentials.password ?? "");
         const users = await getUser(email);
@@ -88,7 +91,8 @@ export const {
       },
     }),
     Credentials({
-      async authorize() {
+      async authorize(_credentials, request) {
+        await enforceIpRateLimit(ipAddress(request), "guest");
         const [guestUser] = await createGuestUser();
         return { ...guestUser, type: "guest" };
       },

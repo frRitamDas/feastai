@@ -89,3 +89,134 @@ test("retry-after is bounded and handles dates", () => {
   assert.equal(parseRetryAfter("Thu, 01 Jan 1970 00:01:00 GMT", 0), 60);
   assert.equal(parseRetryAfter("not valid"), undefined);
 });
+
+test("Gemini discovery follows bounded pages without exposing credentials or embedding models", async () => {
+  const calls: string[] = [];
+  const mock: typeof fetch = (url, init) => {
+    calls.push(String(url));
+    assert.equal(
+      new Headers(init?.headers).get("x-goog-api-key"),
+      "google-secret"
+    );
+    assert.equal(init?.redirect, "error");
+    if (calls.length === 1) {
+      return Promise.resolve(
+        Response.json({
+          models: [
+            {
+              displayName: "Gemini Test",
+              name: "models/gemini-test",
+              supportedGenerationMethods: ["generateContent"],
+            },
+            {
+              name: "models/embed",
+              supportedGenerationMethods: ["embedContent"],
+            },
+          ],
+          nextPageToken: "token-2",
+        })
+      );
+    }
+    return Promise.resolve(
+      Response.json({
+        models: [
+          {
+            name: "models/gemini-next",
+            supportedGenerationMethods: ["generateContent"],
+          },
+        ],
+      })
+    );
+  };
+  assert.deepEqual(await discoverModels("gemini", "google-secret", mock), {
+    models: [
+      { id: "gemini-test", name: "Gemini Test" },
+      { id: "gemini-next", name: "gemini-next" },
+    ],
+    status: "discovered",
+  });
+  assert.ok(
+    calls[0].startsWith(
+      "https://generativelanguage.googleapis.com/v1beta/models?"
+    )
+  );
+  assert.equal(new URL(calls[1]).searchParams.get("pageToken"), "token-2");
+  assert.equal(
+    calls.some((url) => url.includes("google-secret")),
+    false
+  );
+  const repeated: typeof fetch = () =>
+    Promise.resolve(Response.json({ models: [], nextPageToken: "same" }));
+  assert.deepEqual(await discoverModels("gemini", "secret", repeated), {
+    status: "invalid_response",
+  });
+});
+
+test("Hugging Face discovery uses a fixed router endpoint", async () => {
+  const request: typeof fetch = (url, init) => {
+    assert.equal(String(url), "https://router.huggingface.co/v1/models");
+    assert.equal(
+      new Headers(init?.headers).get("authorization"),
+      "Bearer test-token"
+    );
+    assert.equal(init?.redirect, "error");
+    return Promise.resolve(Response.json({ data: [{ id: "test/model" }] }));
+  };
+  assert.deepEqual(await discoverModels("huggingface", "test-token", request), {
+    models: [{ id: "test/model", name: "test/model" }],
+    status: "discovered",
+  });
+});
+
+test("Cloudflare discovery uses an account-scoped fixed endpoint and paginates safely", async () => {
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const credential = JSON.stringify({
+    accountId,
+    apiToken: "cloudflare-token",
+  });
+  const calls: string[] = [];
+  const request: typeof fetch = (input, init) => {
+    const url = new URL(String(input));
+    calls.push(String(input));
+    assert.equal(url.origin, "https://api.cloudflare.com");
+    assert.equal(
+      url.pathname,
+      `/client/v4/accounts/${accountId}/ai/models/search`
+    );
+    assert.equal(url.searchParams.get("task"), "Text Generation");
+    assert.equal(
+      new Headers(init?.headers).get("authorization"),
+      "Bearer cloudflare-token"
+    );
+    assert.equal(init?.redirect, "error");
+    return Promise.resolve(
+      Response.json({
+        result: [
+          { name: calls.length === 1 ? "@cf/test/first" : "@cf/test/second" },
+        ],
+        result_info: { page: calls.length, per_page: 1, total_pages: 2 },
+        success: true,
+      })
+    );
+  };
+  assert.deepEqual(await discoverModels("cloudflare", credential, request), {
+    models: [
+      { id: "@cf/test/first", name: "@cf/test/first" },
+      { id: "@cf/test/second", name: "@cf/test/second" },
+    ],
+    status: "discovered",
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls.some((url) => url.includes("cloudflare-token")),
+    false
+  );
+  assert.deepEqual(
+    await discoverModels(
+      "cloudflare",
+      JSON.stringify({ accountId: "../../example", apiToken: "x" }),
+      request
+    ),
+    { status: "invalid_response" }
+  );
+});
