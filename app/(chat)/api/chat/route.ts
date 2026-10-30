@@ -44,6 +44,8 @@ import { enforceIpRateLimit } from "@/lib/ratelimit";
 import { getRuntimeCatalog } from "@/lib/server/catalog/runtime";
 import { isSameOrigin } from "@/lib/server/conversations/authorization";
 import { createProviderModel } from "@/lib/server/providers/inference";
+import { readLimitedJson } from "@/lib/server/security/read-limited-json";
+import { mergeToolApprovals } from "@/lib/server/security/tool-approvals";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
   let requestBody: PostRequestBody;
 
   try {
-    const json = await request.json();
+    const json = await readLimitedJson(request, 1_000_000);
     requestBody = postRequestBodySchema.parse(json);
   } catch {
     return new ChatbotError("bad_request:api").toResponse();
@@ -97,6 +99,15 @@ export async function POST(request: Request) {
     }
 
     await enforceIpRateLimit(ipAddress(request), "chat");
+    if (
+      isProductionEnvironment &&
+      message?.parts.some((part) => part.type === "file")
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "Attachments are temporarily unavailable."
+      ).toResponse();
+    }
     let sharedModel: Awaited<
       ReturnType<NonNullable<ReturnType<typeof getRuntimeCatalog>>["resolve"]>
     > = null;
@@ -164,39 +175,32 @@ export async function POST(request: Request) {
     let uiMessages: ChatMessage[];
 
     if (isToolApprovalFlow && messages) {
-      const dbMessages = convertToUIMessages(messagesFromDb);
-      const approvalStates = new Map(
-        messages.flatMap(
-          (m) =>
-            m.parts
-              ?.filter(
-                (p: Record<string, unknown>) =>
-                  p.state === "approval-responded" ||
-                  p.state === "output-denied"
-              )
-              .map((p: Record<string, unknown>) => [
-                String(p.toolCallId ?? ""),
-                p,
-              ]) ?? []
-        )
+      const merged = mergeToolApprovals(
+        convertToUIMessages(messagesFromDb),
+        messages
       );
-      uiMessages = dbMessages.map((msg) => ({
-        ...msg,
-        parts: msg.parts.map((part) => {
-          if (
-            "toolCallId" in part &&
-            approvalStates.has(String(part.toolCallId))
-          ) {
-            return { ...part, ...approvalStates.get(String(part.toolCallId)) };
-          }
-          return part;
-        }),
-      })) as ChatMessage[];
+      if (!merged) {
+        return new ChatbotError(
+          "bad_request:api",
+          "No matching pending approval."
+        ).toResponse();
+      }
+      uiMessages = merged;
     } else {
       uiMessages = [
         ...convertToUIMessages(messagesFromDb),
         message as ChatMessage,
       ];
+    }
+
+    if (
+      isProductionEnvironment &&
+      uiMessages.some((item) => item.parts.some((part) => part.type === "file"))
+    ) {
+      return new ChatbotError(
+        "bad_request:api",
+        "Conversations with attachments are temporarily unavailable."
+      ).toResponse();
     }
 
     if (

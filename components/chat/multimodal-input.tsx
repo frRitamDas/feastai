@@ -325,6 +325,9 @@ function PureMultimodalInput({
 
   const handlePaste = useCallback(
     async (event: ClipboardEvent) => {
+      if (process.env.NODE_ENV === "production") {
+        return;
+      }
       const items = event.clipboardData?.items;
       if (!items) {
         return;
@@ -545,11 +548,13 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
-            <AttachmentsButton
-              fileInputRef={fileInputRef}
-              selectedModelId={selectedModelId}
-              status={status}
-            />
+            {process.env.NODE_ENV !== "production" && (
+              <AttachmentsButton
+                fileInputRef={fileInputRef}
+                selectedModelId={selectedModelId}
+                status={status}
+              />
+            )}
             <ModelSelectorCompact
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}

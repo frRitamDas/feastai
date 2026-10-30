@@ -16,22 +16,24 @@ const partSchema = z.union([textPartSchema, filePartSchema]);
 
 const userMessageSchema = z.object({
   id: z.uuid(),
-  parts: z.array(partSchema),
+  parts: z.array(partSchema).min(1).max(20),
   role: z.enum(["user"]),
 });
 
 const toolApprovalMessageSchema = z.object({
-  id: z.string(),
-  parts: z.array(z.record(z.string(), z.unknown())),
+  id: z.string().min(1).max(128),
+  parts: z.array(z.record(z.string(), z.unknown())).max(100),
   role: z.enum(["user", "assistant"]),
 });
 
-export const postRequestBodySchema = z.object({
-  id: z.uuid(),
-  message: userMessageSchema.optional(),
-  messages: z.array(toolApprovalMessageSchema).optional(),
-  selectedChatModel: z.string(),
-  selectedVisibilityType: z.enum(["public", "private"]),
-});
+export const postRequestBodySchema = z
+  .object({
+    id: z.uuid(),
+    message: userMessageSchema.optional(),
+    messages: z.array(toolApprovalMessageSchema).min(1).max(500).optional(),
+    selectedChatModel: z.string().min(1).max(300),
+    selectedVisibilityType: z.enum(["public", "private"]),
+  })
+  .refine((value) => Boolean(value.message) !== Boolean(value.messages));
 
 export type PostRequestBody = z.infer<typeof postRequestBodySchema>;
