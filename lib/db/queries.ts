@@ -42,18 +42,25 @@ import {
   user,
   vote,
 } from "./schema";
+import { createServerlessSql } from "./serverless-sql";
 import { generateHashedPassword } from "./utils";
 
 const databaseUrl = resolveDatabaseUrl(
   process.env.POSTGRES_URL ?? "",
   process.env.GRACE_SUPABASE_POOLER_HOST
 );
-const client = postgres(databaseUrl, {
-  connect_timeout: 10,
-  idle_timeout: 5,
-  max: 1,
-  ...supabasePoolerOptions(databaseUrl),
-});
+// Serverless-safe: a stuck pooler connection (frozen instance, silently
+// dropped socket, pinned slot) can never hang a request forever; the
+// underlying instance is replaced after a bounded timeout.
+const { sql: client } = createServerlessSql(() =>
+  postgres(databaseUrl, {
+    connect_timeout: 10,
+    idle_timeout: 5,
+    max: 1,
+    max_lifetime: 30,
+    ...supabasePoolerOptions(databaseUrl),
+  })
+);
 const db = drizzle(client);
 
 export async function getUserSessionState(id: string) {

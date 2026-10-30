@@ -190,7 +190,11 @@ async function main() {
       code: totpCode(totpSecret, Math.floor(Date.now() / 30_000)),
       totpSecret,
     };
-    assert.equal((await bootstrap(bootstrapBody)).status, 200);
+    assert.equal(
+      (await bootstrap(bootstrapBody)).status,
+      200,
+      `bootstrap: ${logs}`
+    );
     assert.equal((await bootstrap(bootstrapBody)).status, 409);
     const ownerRecord = await db.query(
       'SELECT "totpSecret" FROM "GraceAdministrator" WHERE "userId" = $1',
